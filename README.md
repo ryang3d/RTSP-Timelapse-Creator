@@ -33,8 +33,8 @@ Transform RTSP camera streams into timelapse videos with a simple web interface.
    frontend:
      build:
        args:
-         - REACT_APP_API_URL=http://YOUR_HOSTNAME:3017
-         - REACT_APP_WS_URL=ws://YOUR_HOSTNAME:3018
+         - REACT_APP_API_URL=http://YOUR_HOSTNAME:3001
+         - REACT_APP_WS_URL=ws://YOUR_HOSTNAME:3002
    ```
 
 3. **Start the application:**
@@ -44,14 +44,14 @@ Transform RTSP camera streams into timelapse videos with a simple web interface.
 
 4. **Access the web interface:**
    ```
-   http://YOUR_HOSTNAME:3011
+   http://YOUR_HOSTNAME:3000
    ```
 
 ### Ports
 
-- `3011` - Frontend web interface
-- `3017` - Backend API
-- `3018` - WebSocket server
+- `3000` - Frontend web interface
+- `3001` - Backend API
+- `3002` - WebSocket server
 
 ## Usage
 
@@ -105,7 +105,7 @@ docker-compose exec backend ffmpeg -rtsp_transport tcp -i "rtsp://your-url" -fra
 
 ### WebSocket Connection Issues
 
-- Check if port 3018 is accessible
+- Check if port 3002 is accessible
 - Verify firewall settings
 - Ensure backend container is running: `docker-compose ps`
 - Check browser console for errors
@@ -152,8 +152,8 @@ docker-compose up -d --build
 
 ## Architecture
 
-- **Frontend**: React + TailwindCSS + WebSocket client (port 3011)
-- **Backend**: Node.js + Express + FFmpeg + WebSocket server (ports 3017, 3018)
+- **Frontend**: React + TailwindCSS + WebSocket client (port 3000)
+- **Backend**: Node.js + Express + FFmpeg + WebSocket server (ports 3001, 3002)
 - **Storage**: Docker volumes for snapshots and videos
 
 ## Roadmap
