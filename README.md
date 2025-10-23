@@ -156,6 +156,24 @@ docker-compose up -d --build
 - **Backend**: Node.js + Express + FFmpeg + WebSocket server (ports 3017, 3018)
 - **Storage**: Docker volumes for snapshots and videos
 
+## Roadmap
+
+### Database & Storage Management
+- [ ] **Database Integration** - SQLite/PostgreSQL for session tracking and metadata storage
+- [ ] **Automatic Cleanup** - Configurable retention policies for snapshots and videos
+- [ ] **Storage Quota Management** - Set and enforce storage limits per session/user
+- [ ] **File Organization** - Improved directory structure and naming conventions
+- [ ] **Orphaned File Detection** - Identify and clean up unused snapshot/video files
+
+### Additional Features
+- [ ] **Multi-Camera Support** - Capture timelapses from multiple streams simultaneously
+- [ ] **User Authentication** - Session management and user accounts
+- [ ] **Scheduled Captures** - Cron-like scheduling for automated timelapse creation
+- [ ] **Cloud Storage Integration** - Support for S3, Google Cloud Storage, etc.
+- [ ] **Video Quality Options** - Customizable compression and resolution settings
+- [ ] **Email Notifications** - Alerts when timelapse generation completes
+- [ ] **Snapshot Gallery** - Browse and manage captured snapshots before creating video
+
 ## License
 
 MIT License - see LICENSE file for details.
