@@ -37,20 +37,11 @@ function broadcast(data) {
   });
 }
 
-function buildRTSPUrl(url, username, password) {
-  let rtspUrl = url;
-  if (username && password) {
-    rtspUrl = rtspUrl.replace('rtsp://', `rtsp://${username}:${password}@`);
-  }
-  return rtspUrl;
-}
-
 app.post('/api/test-connection', async (req, res) => {
-  const { url, username, password } = req.body;
-  const rtspUrl = buildRTSPUrl(url, username, password);
+  const { url } = req.body;
   const testFile = path.join(snapshotsDir, `test-${Date.now()}.jpg`);
 
-  ffmpeg(rtspUrl)
+  ffmpeg(url)
     .outputOptions(['-frames:v 1', '-q:v 2', '-rtsp_transport tcp'])
     .output(testFile)
     .on('end', () => {
@@ -64,16 +55,15 @@ app.post('/api/test-connection', async (req, res) => {
 });
 
 app.post('/api/start-capture', (req, res) => {
-  const { url, username, password, interval, duration, useTimer } = req.body;
+  const { url, interval, duration, useTimer } = req.body;
   const sessionId = uuidv4();
-  const rtspUrl = buildRTSPUrl(url, username, password);
   const sessionDir = path.join(snapshotsDir, sessionId);
   
   fs.mkdirSync(sessionDir, { recursive: true });
 
   const session = {
     id: sessionId,
-    rtspUrl,
+    rtspUrl: url,
     interval: parseInt(interval),
     duration: useTimer ? parseInt(duration) : null,
     snapshots: [],

@@ -6,8 +6,6 @@ const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:3002';
 
 function App() {
   const [url, setUrl] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [isCapturing, setIsCapturing] = useState(false);
   const [snapshots, setSnapshots] = useState([]);
   const [interval, setInterval] = useState(5);
@@ -71,7 +69,7 @@ function App() {
       const response = await fetch(`${API_URL}/api/test-connection`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, username, password })
+        body: JSON.stringify({ url })
       });
 
       const data = await response.json();
@@ -88,7 +86,7 @@ function App() {
       const response = await fetch(`${API_URL}/api/start-capture`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, username, password, interval, duration, useTimer })
+        body: JSON.stringify({ url, interval, duration, useTimer })
       });
 
       const data = await response.json();
@@ -164,37 +162,19 @@ function App() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-white mb-2">RTSP URL (include port in URL)</label>
+                <label className="block text-sm font-medium text-white mb-2">
+                  RTSP URL (include credentials in URL if needed)
+                </label>
                 <input
                   type="text"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="rtsp://example.com:554/stream"
+                  placeholder="rtsp://username:password@example.com:554/stream"
                   className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">Username</label>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Optional"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">Password</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Optional"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
-                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  Format: rtsp://[username:password@]host[:port]/path
+                </p>
               </div>
 
               <button
