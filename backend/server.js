@@ -52,7 +52,7 @@ app.post('/api/test-connection', async (req, res) => {
   ffmpeg(url)
     .inputOptions([
       '-rtsp_transport', 'tcp',
-      '-stimeout', '5000000', // 5 second timeout in microseconds
+      '-timeout', '5000000', // 5 second timeout in microseconds
       '-analyzeduration', '2000000',
       '-probesize', '2000000'
     ])
@@ -108,7 +108,7 @@ function captureSnapshot(session) {
   ffmpeg(session.rtspUrl)
     .inputOptions([
       '-rtsp_transport', 'tcp',
-      '-stimeout', '5000000',
+      '-timeout', '5000000',
       '-analyzeduration', '2000000',
       '-probesize', '2000000'
     ])

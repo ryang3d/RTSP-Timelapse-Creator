@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3001:3001"
-      - "3002:3002"
+      - "3001:3002"
     volumes:
       - snapshots_data:/app/snapshots
       - videos_data:/app/videos
@@ -21,13 +21,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=http://localhost:3001
+        - REACT_APP_WS_URL=ws://localhost:3002
     ports:
       - "3000:80"
     depends_on:
       - backend
-    environment:
-      - REACT_APP_API_URL=http://localhost:3001
-      - REACT_APP_WS_URL=ws://localhost:3002
     restart: unless-stopped
     networks:
       - rtsp-network
