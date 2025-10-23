@@ -105,7 +105,7 @@ docker-compose exec backend ffmpeg -rtsp_transport tcp -i "rtsp://your-url" -fra
 
 ### WebSocket Connection Issues
 
-- Check if port 3018 is accessible
+- Check if port 3002 is accessible
 - Verify firewall settings
 - Ensure backend container is running: `docker-compose ps`
 - Check browser console for errors
