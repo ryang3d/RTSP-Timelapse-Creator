@@ -33,8 +33,8 @@ Transform RTSP camera streams into timelapse videos with a simple web interface.
    frontend:
      build:
        args:
-         - REACT_APP_API_URL=http://YOUR_HOSTNAME:3017
-         - REACT_APP_WS_URL=ws://YOUR_HOSTNAME:3018
+         - REACT_APP_API_URL=http://YOUR_HOSTNAME:3001
+         - REACT_APP_WS_URL=ws://YOUR_HOSTNAME:3002
    ```
 
 3. **Start the application:**
@@ -44,14 +44,14 @@ Transform RTSP camera streams into timelapse videos with a simple web interface.
 
 4. **Access the web interface:**
    ```
-   http://YOUR_HOSTNAME:3011
+   http://YOUR_HOSTNAME:3000
    ```
 
 ### Ports
 
-- `3011` - Frontend web interface
-- `3017` - Backend API
-- `3018` - WebSocket server
+- `3000` - Frontend web interface
+- `3001` - Backend API
+- `3002` - WebSocket server
 
 ## Usage
 
