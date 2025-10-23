@@ -8,7 +8,6 @@ function App() {
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [port, setPort] = useState('554');
   const [isCapturing, setIsCapturing] = useState(false);
   const [snapshots, setSnapshots] = useState([]);
   const [interval, setInterval] = useState(5);
@@ -72,7 +71,7 @@ function App() {
       const response = await fetch(`${API_URL}/api/test-connection`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, username, password, port })
+        body: JSON.stringify({ url, username, password })
       });
 
       const data = await response.json();
@@ -89,7 +88,7 @@ function App() {
       const response = await fetch(`${API_URL}/api/start-capture`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, username, password, port, interval, duration, useTimer })
+        body: JSON.stringify({ url, username, password, interval, duration, useTimer })
       });
 
       const data = await response.json();
@@ -165,12 +164,12 @@ function App() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-white mb-2">RTSP URL</label>
+                <label className="block text-sm font-medium text-white mb-2">RTSP URL (include port in URL)</label>
                 <input
                   type="text"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="rtsp://example.com/stream"
+                  placeholder="rtsp://example.com:554/stream"
                   className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
@@ -196,17 +195,6 @@ function App() {
                     className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">Port</label>
-                <input
-                  type="text"
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  placeholder="554"
-                  className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
               </div>
 
               <button

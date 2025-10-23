@@ -37,28 +37,17 @@ function broadcast(data) {
   });
 }
 
-function buildRTSPUrl(url, username, password, port) {
+function buildRTSPUrl(url, username, password) {
   let rtspUrl = url;
   if (username && password) {
     rtspUrl = rtspUrl.replace('rtsp://', `rtsp://${username}:${password}@`);
-  }
-  if (port && port !== '554') {
-    const urlParts = rtspUrl.split('://');
-    const protocol = urlParts[0];
-    const rest = urlParts[1];
-    const authPart = rest.includes('@') ? rest.split('@')[0] + '@' : '';
-    const hostPath = rest.includes('@') ? rest.split('@')[1] : rest;
-    const hostParts = hostPath.split('/');
-    const host = hostParts[0].split(':')[0];
-    const pathPart = hostParts.slice(1).join('/');
-    rtspUrl = `${protocol}://${authPart}${host}:${port}/${pathPart}`;
   }
   return rtspUrl;
 }
 
 app.post('/api/test-connection', async (req, res) => {
-  const { url, username, password, port } = req.body;
-  const rtspUrl = buildRTSPUrl(url, username, password, port);
+  const { url, username, password } = req.body;
+  const rtspUrl = buildRTSPUrl(url, username, password);
   const testFile = path.join(snapshotsDir, `test-${Date.now()}.jpg`);
 
   ffmpeg(rtspUrl)
@@ -75,9 +64,9 @@ app.post('/api/test-connection', async (req, res) => {
 });
 
 app.post('/api/start-capture', (req, res) => {
-  const { url, username, password, port, interval, duration, useTimer } = req.body;
+  const { url, username, password, interval, duration, useTimer } = req.body;
   const sessionId = uuidv4();
-  const rtspUrl = buildRTSPUrl(url, username, password, port);
+  const rtspUrl = buildRTSPUrl(url, username, password);
   const sessionDir = path.join(snapshotsDir, sessionId);
   
   fs.mkdirSync(sessionDir, { recursive: true });
