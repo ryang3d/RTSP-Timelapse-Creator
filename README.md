@@ -1,6 +1,8 @@
-# RTSP Timelapse Creator
+# 📹 RTSP Timelapse Creator
 
 Transform RTSP camera streams into timelapse videos with a simple web interface.
+
+![alt text](./images/screenshot1.png)
 
 ## Features
 
