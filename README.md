@@ -100,7 +100,7 @@ Before you begin, ensure you have:
 **1. Clone the repository:**
 
 ```bash
-git clone https://github.com/yourusername/rtsp-timelapse.git
+git clone https://git.rg3d.me/rg3d/RTSP-Timelapse-Creator
 cd rtsp-timelapse
 ```
 
