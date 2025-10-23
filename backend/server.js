@@ -41,15 +41,38 @@ app.post('/api/test-connection', async (req, res) => {
   const { url } = req.body;
   const testFile = path.join(snapshotsDir, `test-${Date.now()}.jpg`);
 
+  let responseHandled = false;
+  const timeout = setTimeout(() => {
+    if (!responseHandled) {
+      responseHandled = true;
+      res.status(400).json({ success: false, message: 'Connection timeout - unable to reach RTSP stream' });
+    }
+  }, 15000); // 15 second timeout
+
   ffmpeg(url)
-    .outputOptions(['-frames:v 1', '-q:v 2', '-rtsp_transport tcp'])
+    .inputOptions([
+      '-rtsp_transport', 'tcp',
+      '-stimeout', '5000000', // 5 second timeout in microseconds
+      '-analyzeduration', '2000000',
+      '-probesize', '2000000'
+    ])
+    .outputOptions(['-frames:v 1', '-q:v 2'])
     .output(testFile)
     .on('end', () => {
-      if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
-      res.json({ success: true, message: 'Connection successful' });
+      clearTimeout(timeout);
+      if (!responseHandled) {
+        responseHandled = true;
+        if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
+        res.json({ success: true, message: 'Connection successful' });
+      }
     })
     .on('error', (err) => {
-      res.status(400).json({ success: false, message: err.message });
+      clearTimeout(timeout);
+      if (!responseHandled) {
+        responseHandled = true;
+        console.error('Connection test error:', err.message);
+        res.status(400).json({ success: false, message: err.message });
+      }
     })
     .run();
 });
@@ -83,7 +106,13 @@ function captureSnapshot(session) {
   const snapshotFile = path.join(sessionDir, `snapshot-${Date.now()}.jpg`);
 
   ffmpeg(session.rtspUrl)
-    .outputOptions(['-frames:v 1', '-q:v 2', '-rtsp_transport tcp'])
+    .inputOptions([
+      '-rtsp_transport', 'tcp',
+      '-stimeout', '5000000',
+      '-analyzeduration', '2000000',
+      '-probesize', '2000000'
+    ])
+    .outputOptions(['-frames:v 1', '-q:v 2'])
     .output(snapshotFile)
     .on('end', () => {
       const relativePath = `/snapshots/${session.id}/${path.basename(snapshotFile)}`;
