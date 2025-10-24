@@ -616,10 +616,9 @@ function App() {
                 {processing ? 'Processing...' : 'Generate Timelapse'}
               </button>
 
-              {videoUrl && (
+              {videoUrl && sessionId && (
                 <a
-                  href={videoUrl}
-                  download={`timelapse-${sessionId || 'video'}.mp4`}
+                  href={`${API_URL}/api/download/video/${sessionId}`}
                   className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                 >
                   <Download className="w-5 h-5 inline mr-2" />
@@ -698,10 +697,9 @@ function App() {
                   {processing ? 'Processing...' : 'Generate Timelapse'}
                 </button>
 
-                {videoUrl && (
+                {videoUrl && sessionId && (
                   <a
-                    href={videoUrl}
-                    download={`timelapse-${sessionId || 'video'}.mp4`}
+                    href={`${API_URL}/api/download/video/${sessionId}`}
                     className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                   >
                     <Download className="w-5 h-5 inline mr-2" />
@@ -773,10 +771,9 @@ function App() {
                   {processing ? 'Processing...' : 'Generate Timelapse'}
                 </button>
 
-                {videoUrl && (
+                {videoUrl && sessionId && (
                   <a
-                    href={videoUrl}
-                    download={`timelapse-${sessionId || 'video'}.mp4`}
+                    href={`${API_URL}/api/download/video/${sessionId}`}
                     className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                   >
                     <Download className="w-5 h-5 inline mr-2" />
@@ -923,10 +920,9 @@ function App() {
                   {processing ? 'Processing...' : 'Generate Timelapse'}
                 </button>
 
-                {videoUrl && (
+                {videoUrl && sessionId && (
                   <a
-                    href={videoUrl}
-                    download={`timelapse-${sessionId || 'video'}.mp4`}
+                    href={`${API_URL}/api/download/video/${sessionId}`}
                     className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                   >
                     <Download className="w-5 h-5 inline mr-2" />
