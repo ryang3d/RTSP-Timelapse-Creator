@@ -374,7 +374,7 @@ function App() {
   };
 
   const deleteSession = async (sessionId) => {
-    if (!confirm('Are you sure you want to delete this session? This will permanently delete all snapshots and videos.')) {
+    if (!window.confirm('Are you sure you want to delete this session? This will permanently delete all snapshots and videos.')) {
       return;
     }
 
@@ -397,7 +397,7 @@ function App() {
   };
 
   const runCleanup = async () => {
-    if (!confirm('Run cleanup to delete old sessions and orphaned files?')) {
+    if (!window.confirm('Run cleanup to delete old sessions and orphaned files?')) {
       return;
     }
 
