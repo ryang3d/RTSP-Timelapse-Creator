@@ -1,15 +1,29 @@
-# RTSP Timelapse Creator
+# 📹 RTSP Timelapse Creator
 
-Transform RTSP camera streams into timelapse videos with a simple web interface.
+Transform camera streams, uploaded photos, and MQTT-triggered captures into timelapse videos with a comprehensive web interface.
+
+![alt text](./images/screenshot1.png)
 
 ## Features
 
-- 📹 **RTSP Stream Support** - Connect to any IP camera with RTSP protocol
-- ✅ **Connection Testing** - Verify stream accessibility before capturing
-- ⏱️ **Flexible Scheduling** - Set custom intervals and optional auto-stop duration
-- 🎬 **Customizable Output** - Adjust timelapse FPS (1-60)
-- 📡 **Real-time Preview** - View snapshots as they're captured via WebSocket
-- 💾 **Video Export** - Download generated timelapses as MP4 files
+### 📹 **Multiple Input Sources**
+- **RTSP Streams** - Connect to any IP camera with RTSP protocol
+- **Photo Upload** - Drag-and-drop interface for uploading image collections (WIP/UNTESTED)
+- **Network Import** - Import photos from network paths and shared folders (WIP/UNTESTED)
+- **MQTT Triggers** - Capture photos based on MQTT message transitions (1→0) (WIP/UNTESTED)
+
+### 🎛️ **Advanced Management**
+- **Database Integration** - SQLite database for session tracking and metadata storage
+- **Session Management** - View, manage, and delete all capture sessions
+- **Storage Quotas** - Configurable storage limits with automatic enforcement
+- **Automatic Cleanup** - Scheduled cleanup of old sessions and orphaned files
+
+### 🎬 **Timelapse Creation**
+- **Flexible Scheduling** - Set custom intervals and optional auto-stop duration
+- **Customizable Output** - Adjust timelapse FPS (1-60)
+- **Real-time Preview** - View snapshots as they're captured via WebSocket
+- **Video Export** - Download generated timelapses as MP4 files
+- **Thumbnail Generation** - Automatic thumbnail creation for photo galleries
 
 ## Quick Start
 
@@ -55,6 +69,9 @@ Transform RTSP camera streams into timelapse videos with a simple web interface.
 
 ## Usage
 
+The application provides multiple ways to create timelapses:
+
+### 📹 **RTSP Stream Capture**
 1. **Enter your RTSP URL** in the format:
    ```
    rtsp://[username:password@]host[:port]/path
@@ -70,9 +87,35 @@ Transform RTSP camera streams into timelapse videos with a simple web interface.
 
 4. **Start capturing** and watch snapshots appear in real-time
 
-5. **Generate timelapse** once you have at least 2 snapshots
+### 📸 **Photo Upload**
+1. **Switch to "Upload Photos" tab**
+2. **Drag and drop** your image files or click to select
+3. **Supported formats**: JPEG, PNG, GIF (max 10MB each)
+4. **Preview uploaded images** in the gallery
+5. **Generate timelapse** from your photo collection
 
-6. **Download your video** as MP4
+### 📁 **Network Import**
+1. **Switch to "Import from Path" tab**
+2. **Enter network path** to directory containing images
+   - Example: `/path/to/photos` or `\\server\share\photos`
+3. **Click "Import Photos"** to copy and process images
+4. **Generate timelapse** from imported photos
+
+### 📡 **MQTT Trigger**
+1. **Switch to "MQTT Trigger" tab**
+2. **Configure MQTT settings:**
+   - **Broker URL**: `mqtt://broker.example.com:1883`
+   - **Topic**: `sensor/trigger`
+   - **Credentials** (optional): username and password
+3. **Start MQTT capture** to listen for messages
+4. **Photos are captured** when message changes from '1' to '0'
+5. **Perfect for motion sensors, door triggers, etc.**
+
+### 🎬 **Timelapse Generation**
+1. **Generate timelapse** once you have at least 2 snapshots
+2. **Download your video** as MP4
+3. **Re-download from Sessions tab** - All generated videos are preserved
+4. **Manage sessions** in the Sessions tab
 
 ## Example Settings
 
@@ -154,25 +197,104 @@ docker-compose up -d --build
 
 - **Frontend**: React + TailwindCSS + WebSocket client (port 3000)
 - **Backend**: Node.js + Express + FFmpeg + WebSocket server (ports 3001, 3002)
-- **Storage**: Docker volumes for snapshots and videos
+- **Database**: SQLite with PostgreSQL migration path
+- **Storage**: Docker volumes for snapshots, videos, and database
+- **MQTT**: Real-time message handling for trigger-based captures
+- **Scheduling**: Automated cleanup with node-cron
+
+## Session Management
+
+### 📊 **Sessions Tab**
+- **View all sessions** with metadata (type, date, size, snapshot count)
+- **Download timelapse videos** from any session with generated videos
+- **Delete individual sessions** or run bulk cleanup
+- **Storage statistics** showing total usage and quotas
+- **Manual cleanup** to remove old sessions and orphaned files
+
+### 🗄️ **Database Features**
+- **Persistent storage** - All sessions survive server restarts
+- **Metadata tracking** - File sizes, dimensions, timestamps
+- **Storage quotas** - Configurable limits per session and total
+- **Automatic cleanup** - Hourly cleanup of old sessions (7-day default)
+
+## Advanced Configuration
+
+### 🗂️ **Storage Management**
+- **Retention policies** - Configurable cleanup intervals
+- **Storage quotas** - Prevent disk space issues
+- **Orphaned file detection** - Clean up unused files
+- **Session metadata** - Track all capture details
+
+### 📡 **MQTT Integration**
+- **Broker connection** - Support for any MQTT broker
+- **Authentication** - Username/password support
+- **Trigger patterns** - Customizable message-based capture
+- **Real-time status** - Connection and message monitoring
+
+## API Endpoints
+
+### 📡 **Core Capture**
+- `POST /api/test-connection` - Test RTSP stream connectivity
+- `POST /api/start-capture` - Start RTSP capture session
+- `POST /api/stop-capture` - Stop active capture session
+- `POST /api/generate-timelapse` - Generate video from snapshots
+
+### 📸 **Photo Management**
+- `POST /api/upload-photos` - Upload multiple photos with drag-and-drop
+- `POST /api/import-from-path` - Import photos from network path
+- `GET /api/session/:id` - Get session details and snapshots
+
+### 📡 **MQTT Integration**
+- `POST /api/start-mqtt-capture` - Start MQTT listener session
+- `POST /api/stop-mqtt-capture` - Stop MQTT session
+- `GET /api/mqtt-status/:id` - Get MQTT connection status
+
+### 🗄️ **Session Management**
+- `GET /api/sessions` - List all sessions with metadata
+- `DELETE /api/session/:id` - Delete session and all files
+- `GET /api/storage-stats` - Get storage usage statistics
+
+### 🧹 **Storage Management**
+- `POST /api/cleanup/run` - Manual cleanup of old sessions
+- `GET /api/cleanup/stats` - Get cleanup statistics
+- `GET /api/storage/quotas` - Get storage quota settings
+- `POST /api/storage/quotas` - Set storage quotas
+
+### 📥 **Video Downloads**
+- `GET /api/download/video/:sessionId` - Download timelapse video (forced download)
+
+## Environment Variables
+
+### 🔧 **Optional Configuration**
+```bash
+# MQTT Default Settings (optional)
+MQTT_BROKER_URL=mqtt://broker.example.com:1883
+MQTT_USERNAME=your_username
+MQTT_PASSWORD=your_password
+
+# Storage Quotas (optional)
+MAX_TOTAL_STORAGE_MB=1024
+MAX_SESSION_STORAGE_MB=100
+DEFAULT_RETENTION_DAYS=7
+```
 
 ## Roadmap
 
-### Database & Storage Management
-- [ ] **Database Integration** - SQLite/PostgreSQL for session tracking and metadata storage
-- [ ] **Automatic Cleanup** - Configurable retention policies for snapshots and videos
-- [ ] **Storage Quota Management** - Set and enforce storage limits per session/user
-- [ ] **File Organization** - Improved directory structure and naming conventions
-- [ ] **Orphaned File Detection** - Identify and clean up unused snapshot/video files
+### ✅ **Completed Features**
+- [x] **Database Integration** - SQLite database with session tracking
+- [x] **Photo Upload** - Drag-and-drop interface with thumbnails (UNTESTED)
+- [x] **Network Import** - Import from network paths (UNTESTED)
+- [x] **MQTT Triggers** - Message-based photo capture (UNTESTED)
+- [x] **Storage Management** - Quotas, cleanup, and session management
+- [x] **Session Persistence** - All data survives restarts
 
-### Additional Features
-- [ ] **Multi-Camera Support** - Capture timelapses from multiple streams simultaneously
-- [ ] **User Authentication** - Session management and user accounts
-- [ ] **Scheduled Captures** - Cron-like scheduling for automated timelapse creation
-- [ ] **Cloud Storage Integration** - Support for S3, Google Cloud Storage, etc.
-- [ ] **Video Quality Options** - Customizable compression and resolution settings
-- [ ] **Email Notifications** - Alerts when timelapse generation completes
-- [ ] **Snapshot Gallery** - Browse and manage captured snapshots before creating video
+### 🚀 **Future Enhancements**
+- [ ] **Universal Video Input** - USB cameras, capture cards, HTTP streams
+- [ ] **Multi-Camera Support** - Simultaneous capture from multiple sources
+- [ ] **Scheduled Captures** - Cron-like scheduling for automated timelapses
+- [ ] **Cloud Storage** - S3, Google Cloud Storage integration
+- [ ] **Video Quality Options** - Advanced encoding settings
+- [ ] **User Authentication** - Multi-user support with accounts
 
 ## License
 
