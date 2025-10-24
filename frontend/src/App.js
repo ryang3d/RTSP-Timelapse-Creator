@@ -33,9 +33,12 @@ function App() {
   const [mqttUsername, setMqttUsername] = useState('');
   const [mqttPassword, setMqttPassword] = useState('');
   const [mqttRtspUrl, setMqttRtspUrl] = useState('');
+  const [mqttUseSharedUrl, setMqttUseSharedUrl] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
   const [mqttLastMessage, setMqttLastMessage] = useState('');
   const [mqttTesting, setMqttTesting] = useState(false);
+  const [mqttConnectionStatus, setMqttConnectionStatus] = useState(null);
+  const [testingMqttConnection, setTestingMqttConnection] = useState(false);
   
   // Sessions management states
   const [sessions, setSessions] = useState([]);
@@ -293,8 +296,37 @@ function App() {
   };
 
   // MQTT functions
+  const testMqttConnection = async () => {
+    const rtspUrlToTest = mqttUseSharedUrl ? url : mqttRtspUrl;
+    
+    if (!rtspUrlToTest) {
+      alert('Please enter an RTSP URL');
+      return;
+    }
+
+    setTestingMqttConnection(true);
+    setMqttConnectionStatus(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/test-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: rtspUrlToTest })
+      });
+
+      const data = await response.json();
+      setMqttConnectionStatus(data.success ? 'success' : 'error');
+    } catch (error) {
+      setMqttConnectionStatus('error');
+    } finally {
+      setTestingMqttConnection(false);
+    }
+  };
+
   const startMqttCapture = async () => {
-    if (!mqttBrokerUrl || !mqttTopic || !mqttRtspUrl) {
+    const rtspUrlToUse = mqttUseSharedUrl ? url : mqttRtspUrl;
+    
+    if (!mqttBrokerUrl || !mqttTopic || !rtspUrlToUse) {
       alert('Please enter broker URL, topic, and RTSP URL');
       return;
     }
@@ -308,7 +340,7 @@ function App() {
           topic: mqttTopic,
           username: mqttUsername || undefined,
           password: mqttPassword || undefined,
-          rtspUrl: mqttRtspUrl,
+          rtspUrl: rtspUrlToUse,
           sessionId: sessionId || uuidv4()
         })
       });
@@ -820,19 +852,40 @@ function App() {
                 </div>
 
                 <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={mqttUseSharedUrl}
+                      onChange={(e) => setMqttUseSharedUrl(e.target.checked)}
+                      className="w-4 h-4 rounded"
+                    />
+                    <label className="text-sm font-medium text-white">Use RTSP URL from Stream tab</label>
+                  </div>
+                  
                   <label className="block text-sm font-medium text-white mb-2">
                     RTSP Stream URL
                   </label>
                   <input
                     type="text"
-                    value={mqttRtspUrl}
+                    value={mqttUseSharedUrl ? url : mqttRtspUrl}
                     onChange={(e) => setMqttRtspUrl(e.target.value)}
+                    disabled={mqttUseSharedUrl}
                     placeholder="rtsp://username:password@camera.example.com:554/stream"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <p className="text-xs text-gray-400 mt-1">
                     The video stream to capture from when MQTT trigger fires
                   </p>
+                  
+                  <button
+                    onClick={testMqttConnection}
+                    disabled={testingMqttConnection || (!mqttUseSharedUrl && !mqttRtspUrl) || (mqttUseSharedUrl && !url)}
+                    className="w-full mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                  >
+                    {testingMqttConnection ? 'Testing...' : 'Test RTSP Connection'}
+                    {mqttConnectionStatus === 'success' && <CheckCircle className="w-5 h-5 text-green-400" />}
+                    {mqttConnectionStatus === 'error' && <XCircle className="w-5 h-5 text-red-400" />}
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -874,7 +927,7 @@ function App() {
                   {!mqttConnected ? (
                     <button
                       onClick={startMqttCapture}
-                      disabled={!mqttBrokerUrl || !mqttTopic || !mqttRtspUrl || mqttTesting}
+                      disabled={!mqttBrokerUrl || !mqttTopic || (!mqttUseSharedUrl && !mqttRtspUrl) || (mqttUseSharedUrl && !url) || mqttTesting}
                       className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
                     >
                       <Wifi className="w-5 h-5" />
