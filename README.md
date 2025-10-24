@@ -1,6 +1,8 @@
-# RTSP Timelapse Creator
+# 📹 RTSP Timelapse Creator
 
 Transform camera streams, uploaded photos, and MQTT-triggered captures into timelapse videos with a comprehensive web interface.
+
+![alt text](./images/screenshot1.png)
 
 ## Features
 
