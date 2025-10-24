@@ -8,9 +8,9 @@ Transform camera streams, uploaded photos, and MQTT-triggered captures into time
 
 ### 📹 **Multiple Input Sources**
 - **RTSP Streams** - Connect to any IP camera with RTSP protocol
-- **Photo Upload** - Drag-and-drop interface for uploading image collections
-- **Network Import** - Import photos from network paths and shared folders
-- **MQTT Triggers** - Capture photos based on MQTT message transitions (1→0)
+- **Photo Upload** - Drag-and-drop interface for uploading image collections (WIP/UNTESTED)
+- **Network Import** - Import photos from network paths and shared folders (WIP/UNTESTED)
+- **MQTT Triggers** - Capture photos based on MQTT message transitions (1→0) (WIP/UNTESTED)
 
 ### 🎛️ **Advanced Management**
 - **Database Integration** - SQLite database for session tracking and metadata storage
