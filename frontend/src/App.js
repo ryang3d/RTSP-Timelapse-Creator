@@ -444,8 +444,8 @@ function App() {
             if (session.rtsp_url) {
               setUrl(session.rtsp_url);
             }
-            // Note: Can't resume actual capture, but can generate timelapse
-            setIsCapturing(false);
+            // If session is active, show stop button so user can stop it
+            setIsCapturing(session.active ? true : false);
             break;
           case 'upload':
             setActiveTab('upload');
@@ -465,8 +465,9 @@ function App() {
             break;
           case 'mqtt':
             setActiveTab('mqtt');
-            // Note: Can't resume MQTT connection, but can generate timelapse
-            setMqttConnected(false);
+            // If MQTT session is active, show it as connected
+            setMqttConnected(session.active ? true : false);
+            setMqttTesting(session.active ? true : false);
             break;
           default:
             setActiveTab('rtsp');
