@@ -114,7 +114,8 @@ The application provides multiple ways to create timelapses:
 ### 🎬 **Timelapse Generation**
 1. **Generate timelapse** once you have at least 2 snapshots
 2. **Download your video** as MP4
-3. **Manage sessions** in the Sessions tab
+3. **Re-download from Sessions tab** - All generated videos are preserved
+4. **Manage sessions** in the Sessions tab
 
 ## Example Settings
 
@@ -205,6 +206,7 @@ docker-compose up -d --build
 
 ### 📊 **Sessions Tab**
 - **View all sessions** with metadata (type, date, size, snapshot count)
+- **Download timelapse videos** from any session with generated videos
 - **Delete individual sessions** or run bulk cleanup
 - **Storage statistics** showing total usage and quotas
 - **Manual cleanup** to remove old sessions and orphaned files
@@ -257,6 +259,9 @@ docker-compose up -d --build
 - `GET /api/cleanup/stats` - Get cleanup statistics
 - `GET /api/storage/quotas` - Get storage quota settings
 - `POST /api/storage/quotas` - Set storage quotas
+
+### 📥 **Video Downloads**
+- `GET /api/download/video/:sessionId` - Download timelapse video (forced download)
 
 ## Environment Variables
 
