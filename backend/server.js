@@ -545,17 +545,17 @@ app.post('/api/import-from-path', async (req, res) => {
 // MQTT endpoints
 app.post('/api/start-mqtt-capture', async (req, res) => {
   try {
-    const { brokerUrl, topic, username, password, sessionId } = req.body;
+    const { brokerUrl, topic, username, password, rtspUrl, sessionId } = req.body;
     
-    if (!brokerUrl || !topic) {
-      return res.status(400).json({ success: false, message: 'Broker URL and topic are required' });
+    if (!brokerUrl || !topic || !rtspUrl) {
+      return res.status(400).json({ success: false, message: 'Broker URL, topic, and RTSP URL are required' });
     }
 
     // Create session in database
     const sessionData = {
       id: sessionId,
       source_type: 'mqtt',
-      source_config: JSON.stringify({ brokerUrl, topic, username }),
+      source_config: JSON.stringify({ brokerUrl, topic, username, rtspUrl }),
       interval_seconds: 1, // Not used for MQTT
       use_timer: false
     };
@@ -695,10 +695,19 @@ async function captureMqttSnapshot(sessionId) {
 
   const snapshotFile = path.join(sessionDir, `mqtt-${Date.now()}.jpg`);
 
-  // For MQTT, we'll use a placeholder image or try to capture from a default source
-  // In a real implementation, you might want to specify a camera source in the MQTT config
+  // Get RTSP URL from session configuration
   const sourceConfig = session.source_config ? JSON.parse(session.source_config) : {};
-  const rtspUrl = sourceConfig.rtspUrl || 'rtsp://localhost:8554/stream'; // Default fallback
+  const rtspUrl = sourceConfig.rtspUrl;
+  
+  if (!rtspUrl) {
+    console.error(`No RTSP URL configured for MQTT session ${sessionId}`);
+    broadcast({
+      type: 'error',
+      sessionId: sessionId,
+      message: 'No RTSP URL configured for MQTT capture'
+    });
+    return;
+  }
 
   ffmpeg(rtspUrl)
     .inputOptions([
