@@ -1026,13 +1026,24 @@ function App() {
                                 <div>Size: {Math.round((session.total_snapshot_size || 0) / 1024 / 1024)}MB</div>
                               </div>
                             </div>
-                            <button
-                              onClick={() => deleteSession(session.id)}
-                              className="ml-4 px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              Delete
-                            </button>
+                            <div className="ml-4 flex gap-2">
+                              {session.video_count > 0 && (
+                                <a
+                                  href={`${API_URL}/api/download/video/${session.id}`}
+                                  className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Download
+                                </a>
+                              )}
+                              <button
+                                onClick={() => deleteSession(session.id)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                Delete
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
