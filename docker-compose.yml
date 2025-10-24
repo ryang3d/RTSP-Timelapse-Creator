@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3001:3001"
-      - "3001:3002"
+      - "3002:3002"
     volumes:
       - snapshots_data:/app/snapshots
       - videos_data:/app/videos
