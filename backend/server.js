@@ -957,6 +957,33 @@ function checkQuotaBeforeCapture(sessionId) {
   return { success: true };
 }
 
+// Video download endpoint with forced download headers
+app.get('/api/download/video/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const videoPath = path.join(videosDir, `timelapse-${sessionId}.mp4`);
+  
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ success: false, message: 'Video not found' });
+  }
+  
+  const filename = `timelapse-${sessionId}.mp4`;
+  
+  // Set headers to force download
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  
+  // Stream the file
+  const fileStream = fs.createReadStream(videoPath);
+  fileStream.pipe(res);
+  
+  fileStream.on('error', (err) => {
+    console.error('Error streaming video file:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Error downloading video' });
+    }
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
