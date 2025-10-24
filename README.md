@@ -282,9 +282,9 @@ DEFAULT_RETENTION_DAYS=7
 
 ### ✅ **Completed Features**
 - [x] **Database Integration** - SQLite database with session tracking
-- [x] **Photo Upload** - Drag-and-drop interface with thumbnails
-- [x] **Network Import** - Import from network paths
-- [x] **MQTT Triggers** - Message-based photo capture
+- [x] **Photo Upload** - Drag-and-drop interface with thumbnails (UNTESTED)
+- [x] **Network Import** - Import from network paths (UNTESTED)
+- [x] **MQTT Triggers** - Message-based photo capture (UNTESTED)
 - [x] **Storage Management** - Quotas, cleanup, and session management
 - [x] **Session Persistence** - All data survives restarts
 
