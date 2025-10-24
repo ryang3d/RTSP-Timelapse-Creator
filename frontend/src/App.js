@@ -32,6 +32,7 @@ function App() {
   const [mqttTopic, setMqttTopic] = useState('');
   const [mqttUsername, setMqttUsername] = useState('');
   const [mqttPassword, setMqttPassword] = useState('');
+  const [mqttRtspUrl, setMqttRtspUrl] = useState('');
   const [mqttConnected, setMqttConnected] = useState(false);
   const [mqttLastMessage, setMqttLastMessage] = useState('');
   const [mqttTesting, setMqttTesting] = useState(false);
@@ -293,8 +294,8 @@ function App() {
 
   // MQTT functions
   const startMqttCapture = async () => {
-    if (!mqttBrokerUrl || !mqttTopic) {
-      alert('Please enter broker URL and topic');
+    if (!mqttBrokerUrl || !mqttTopic || !mqttRtspUrl) {
+      alert('Please enter broker URL, topic, and RTSP URL');
       return;
     }
 
@@ -307,6 +308,7 @@ function App() {
           topic: mqttTopic,
           username: mqttUsername || undefined,
           password: mqttPassword || undefined,
+          rtspUrl: mqttRtspUrl,
           sessionId: sessionId || uuidv4()
         })
       });
@@ -617,7 +619,7 @@ function App() {
               {videoUrl && (
                 <a
                   href={videoUrl}
-                  download
+                  download={`timelapse-${sessionId || 'video'}.mp4`}
                   className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                 >
                   <Download className="w-5 h-5 inline mr-2" />
@@ -699,7 +701,7 @@ function App() {
                 {videoUrl && (
                   <a
                     href={videoUrl}
-                    download
+                    download={`timelapse-${sessionId || 'video'}.mp4`}
                     className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                   >
                     <Download className="w-5 h-5 inline mr-2" />
@@ -774,7 +776,7 @@ function App() {
                 {videoUrl && (
                   <a
                     href={videoUrl}
-                    download
+                    download={`timelapse-${sessionId || 'video'}.mp4`}
                     className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                   >
                     <Download className="w-5 h-5 inline mr-2" />
@@ -820,6 +822,22 @@ function App() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    RTSP Stream URL
+                  </label>
+                  <input
+                    type="text"
+                    value={mqttRtspUrl}
+                    onChange={(e) => setMqttRtspUrl(e.target.value)}
+                    placeholder="rtsp://username:password@camera.example.com:554/stream"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    The video stream to capture from when MQTT trigger fires
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-white mb-2">
@@ -850,8 +868,8 @@ function App() {
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
                   <h3 className="text-blue-300 font-semibold mb-2">How it works:</h3>
                   <p className="text-sm text-blue-200">
-                    The system will capture a photo when the MQTT message changes from '1' to '0' on the specified topic.
-                    This is useful for motion sensors, door triggers, or other binary sensors.
+                    The system will capture a photo from the specified RTSP stream when the MQTT message changes from '1' to '0' on the specified topic.
+                    This is useful for motion sensors, door triggers, or other binary sensors that need to trigger camera captures.
                   </p>
                 </div>
 
@@ -859,7 +877,7 @@ function App() {
                   {!mqttConnected ? (
                     <button
                       onClick={startMqttCapture}
-                      disabled={!mqttBrokerUrl || !mqttTopic || mqttTesting}
+                      disabled={!mqttBrokerUrl || !mqttTopic || !mqttRtspUrl || mqttTesting}
                       className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
                     >
                       <Wifi className="w-5 h-5" />
@@ -908,7 +926,7 @@ function App() {
                 {videoUrl && (
                   <a
                     href={videoUrl}
-                    download
+                    download={`timelapse-${sessionId || 'video'}.mp4`}
                     className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
                   >
                     <Download className="w-5 h-5 inline mr-2" />
