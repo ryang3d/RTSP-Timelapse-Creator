@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Square, Download, Settings, CheckCircle, XCircle, Upload, FolderOpen, Image, Wifi, Database, Trash2 } from 'lucide-react';
+import { Play, Square, Download, Settings, CheckCircle, XCircle, Upload, FolderOpen, Wifi, Database, Trash2, Camera, Monitor, Globe, Radio, ChevronDown, Clock, Zap } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
@@ -23,9 +23,18 @@ function App() {
   const [activeTab, setActiveTab] = useState('rtsp');
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [networkPath, setNetworkPath] = useState('');
+  const [childDirectories, setChildDirectories] = useState([]);
+  const [selectedChildDirectory, setSelectedChildDirectory] = useState('');
+  const [loadingDirectories, setLoadingDirectories] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+
+  // New navigation states
+  const [selectedSource, setSelectedSource] = useState('rtsp');
+  const [selectedTrigger, setSelectedTrigger] = useState('timed');
+  const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
   
   // MQTT states
   const [mqttBrokerUrl, setMqttBrokerUrl] = useState('');
@@ -39,6 +48,37 @@ function App() {
   const [mqttTesting, setMqttTesting] = useState(false);
   const [mqttConnectionStatus, setMqttConnectionStatus] = useState(null);
   const [testingMqttConnection, setTestingMqttConnection] = useState(false);
+
+  // NEW: Universal source states
+  const [usbDevicePath, setUsbDevicePath] = useState('/dev/video0');
+  const [usbResolution, setUsbResolution] = useState('1920x1080');
+  const [usbFormat, setUsbFormat] = useState('mjpeg');
+  const [usbFps, setUsbFps] = useState(30);
+
+  const [captureCardDevicePath, setCaptureCardDevicePath] = useState('/dev/video1');
+  const [captureCardResolution, setCaptureCardResolution] = useState('1920x1080');
+  const [captureCardFormat, setCaptureCardFormat] = useState('yuyv');
+  const [captureCardFps, setCaptureCardFps] = useState(30);
+
+  const [httpStreamUrl, setHttpStreamUrl] = useState('');
+  const [httpStreamFormat, setHttpStreamFormat] = useState('mjpeg');
+
+  const [rtmpStreamUrl, setRtmpStreamUrl] = useState('');
+
+  const [screenDisplay, setScreenDisplay] = useState(':0.0');
+  const [screenRegion, setScreenRegion] = useState('');
+
+  // Device enumeration states
+  const [availableDevices, setAvailableDevices] = useState(null);
+  const [loadingDevices, setLoadingDevices] = useState(false);
+
+  // MQTT source selection
+  const [mqttSourceType, setMqttSourceType] = useState('rtsp');
+  const [mqttHttpUrl, setMqttHttpUrl] = useState('');
+  const [mqttRtmpUrl, setMqttRtmpUrl] = useState('');
+  const [mqttUsbDevice, setMqttUsbDevice] = useState('/dev/video0');
+  const [mqttCaptureCardDevice, setMqttCaptureCardDevice] = useState('/dev/video1');
+  const [mqttScreenDisplay, setMqttScreenDisplay] = useState(':0.0');
   
   // Sessions management states
   const [sessions, setSessions] = useState([]);
@@ -131,22 +171,61 @@ function App() {
   };
 
   const startCapture = async () => {
+    const sourceConfig = {};
+
+    // Build source configuration based on active tab
+    switch (activeTab) {
+      case 'rtsp':
+        sourceConfig.rtspUrl = url;
+        break;
+      case 'video_devices':
+        sourceConfig.devicePath = usbDevicePath;
+        sourceConfig.resolution = usbResolution;
+        sourceConfig.format = usbFormat;
+        sourceConfig.fps = usbFps;
+        break;
+      case 'http':
+        sourceConfig.httpUrl = httpStreamUrl;
+        sourceConfig.streamFormat = httpStreamFormat;
+        break;
+      case 'rtmp':
+        sourceConfig.rtmpUrl = rtmpStreamUrl;
+        break;
+      case 'screen':
+        sourceConfig.display = screenDisplay;
+        sourceConfig.region = screenRegion;
+        break;
+      default:
+        alert('Unsupported source type');
+        return;
+    }
+
     try {
       const response = await fetch(`${API_URL}/api/start-capture`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, interval, duration, useTimer })
+        body: JSON.stringify({
+          sourceType: activeTab === 'rtsp' ? 'rtsp' :
+                      activeTab === 'video_devices' ? 'usb_camera' :
+                      activeTab === 'http' ? 'http_stream' :
+                      activeTab === 'rtmp' ? 'rtmp_stream' :
+                      activeTab === 'screen' ? 'screen_capture' : 'rtsp',
+          sourceConfig,
+          interval,
+          duration,
+          useTimer
+        })
       });
 
       const data = await response.json();
-      
+
       if (data.success) {
         setSessionId(data.sessionId);
         setIsCapturing(true);
         setSnapshots([]);
         setVideoUrl('');
       } else {
-        alert('Failed to start capture');
+        alert('Failed to start capture: ' + data.message);
       }
     } catch (error) {
       alert('Error starting capture: ' + error.message);
@@ -232,9 +311,48 @@ function App() {
     }
   };
 
+  const loadChildDirectories = async (parentPath) => {
+    if (!parentPath.trim()) {
+      setChildDirectories([]);
+      setSelectedChildDirectory('');
+      return;
+    }
+
+    setLoadingDirectories(true);
+    try {
+      const response = await fetch(`${API_URL}/api/list-child-directories?parentPath=${encodeURIComponent(parentPath)}`);
+      const data = await response.json();
+
+      if (data.success) {
+        setChildDirectories(data.childDirectories);
+        // Auto-populate parent path from env var if available and not already set
+        if (data.defaultParentPath && !networkPath) {
+          setNetworkPath(data.defaultParentPath);
+          // Reload directories for the default path
+          if (data.defaultParentPath !== parentPath) {
+            loadChildDirectories(data.defaultParentPath);
+          }
+        }
+      } else {
+        alert('Failed to load child directories: ' + data.message);
+        setChildDirectories([]);
+      }
+    } catch (error) {
+      alert('Error loading child directories: ' + error.message);
+      setChildDirectories([]);
+    } finally {
+      setLoadingDirectories(false);
+    }
+  };
+
   const handleImportFromPath = async () => {
     if (!networkPath.trim()) {
-      alert('Please enter a network path');
+      alert('Please enter a parent directory path');
+      return;
+    }
+
+    if (!selectedChildDirectory) {
+      alert('Please select a child directory');
       return;
     }
 
@@ -243,14 +361,15 @@ function App() {
       const response = await fetch(`${API_URL}/api/import-from-path`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          networkPath: networkPath.trim(),
+        body: JSON.stringify({
+          parentPath: networkPath.trim(),
+          childDirectory: selectedChildDirectory,
           sessionId: sessionId || uuidv4()
         })
       });
 
       const data = await response.json();
-      
+
       if (data.success) {
         setSessionId(data.sessionId);
         setUploadedFiles(prev => [...prev, ...data.importedFiles]);
@@ -258,7 +377,7 @@ function App() {
           url: `${API_URL}${file.path}`,
           timestamp: Date.now()
         }))]);
-        setNetworkPath('');
+        setSelectedChildDirectory('');
       } else {
         alert('Import failed: ' + data.message);
       }
@@ -324,11 +443,55 @@ function App() {
   };
 
   const startMqttCapture = async () => {
-    const rtspUrlToUse = mqttUseSharedUrl ? url : mqttRtspUrl;
-    
-    if (!mqttBrokerUrl || !mqttTopic || !rtspUrlToUse) {
-      alert('Please enter broker URL, topic, and RTSP URL');
+    if (!mqttBrokerUrl || !mqttTopic) {
+      alert('Please enter broker URL and topic');
       return;
+    }
+
+    // Build source configuration based on selected source
+    const sourceConfig = {};
+    let sourceType = selectedSource;
+
+    switch (selectedSource) {
+      case 'rtsp':
+        sourceConfig.rtspUrl = mqttUseSharedUrl ? url : mqttRtspUrl;
+        if (!sourceConfig.rtspUrl) {
+          alert('Please enter RTSP URL');
+          return;
+        }
+        break;
+      case 'video_devices':
+        sourceConfig.devicePath = mqttUsbDevice;
+        sourceConfig.resolution = '1920x1080';
+        sourceConfig.format = 'mjpeg';
+        sourceConfig.fps = 30;
+        sourceType = 'usb_camera';
+        break;
+      case 'http':
+        sourceConfig.httpUrl = mqttHttpUrl;
+        sourceConfig.streamFormat = 'mjpeg';
+        if (!sourceConfig.httpUrl) {
+          alert('Please enter HTTP stream URL');
+          return;
+        }
+        sourceType = 'http_stream';
+        break;
+      case 'rtmp':
+        sourceConfig.rtmpUrl = mqttRtmpUrl;
+        if (!sourceConfig.rtmpUrl) {
+          alert('Please enter RTMP stream URL');
+          return;
+        }
+        sourceType = 'rtmp_stream';
+        break;
+      case 'screen':
+        sourceConfig.display = mqttScreenDisplay;
+        sourceConfig.region = '';
+        sourceType = 'screen_capture';
+        break;
+      default:
+        alert('Unsupported MQTT source type');
+        return;
     }
 
     try {
@@ -340,13 +503,14 @@ function App() {
           topic: mqttTopic,
           username: mqttUsername || undefined,
           password: mqttPassword || undefined,
-          rtspUrl: rtspUrlToUse,
+          sourceType: sourceType,
+          sourceConfig: sourceConfig,
           sessionId: sessionId || uuidv4()
         })
       });
 
       const data = await response.json();
-      
+
       if (data.success) {
         setSessionId(data.sessionId);
         setMqttTesting(true);
@@ -420,7 +584,8 @@ function App() {
         // Load snapshots
         const snapshotUrls = data.session.snapshots.map(snap => ({
           url: `${API_URL}${snap.file_path}`,
-          timestamp: new Date(snap.created_at).getTime()
+          timestamp: new Date(snap.captured_at).getTime(),
+          capturedAt: new Date(snap.captured_at).toLocaleString()
         }));
         setSnapshots(snapshotUrls);
         
@@ -530,11 +695,42 @@ function App() {
 
   // Load sessions and stats when sessions tab is selected
   useEffect(() => {
-    if (activeTab === 'sessions') {
+    if (showSessions) {
       loadSessions();
       loadStorageStats();
     }
-  }, [activeTab]);
+  }, [showSessions]);
+
+  // Load default parent directory when import tab is selected
+  useEffect(() => {
+    if (activeTab === 'import' && !networkPath) {
+      loadChildDirectories('');
+    }
+  }, [activeTab, networkPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load available devices when relevant tabs are selected
+  useEffect(() => {
+    if (['video_devices', 'screen', 'mqtt'].includes(activeTab) || ['video_devices', 'screen'].includes(selectedSource)) {
+      loadAvailableDevices();
+    }
+  }, [activeTab, selectedSource]);
+
+  // Load available devices
+  const loadAvailableDevices = async () => {
+    setLoadingDevices(true);
+    try {
+      const response = await fetch(`${API_URL}/api/list-devices`);
+      const data = await response.json();
+
+      if (data.success) {
+        setAvailableDevices(data.devices);
+      }
+    } catch (error) {
+      console.error('Error loading devices:', error);
+    } finally {
+      setLoadingDevices(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-8">
@@ -543,58 +739,114 @@ function App() {
           RTSP Timelapse Creator
         </h1>
 
-        {/* Tab Navigation */}
-        <div className="flex justify-center mb-8">
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-1 border border-white/20">
+        {/* New Navigation */}
+        <div className="flex justify-center mb-8 relative z-50">
+          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-1 border border-white/20 flex gap-2">
+            {/* Input Sources Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
+                className="px-4 py-2 rounded-md transition-colors whitespace-nowrap bg-purple-600 text-white flex items-center gap-2"
+              >
+                {selectedSource === 'rtsp' && <><Settings className="w-4 h-4" /> RTSP Stream</>}
+                {selectedSource === 'video_devices' && <><Camera className="w-4 h-4" /> Video Devices</>}
+                {selectedSource === 'http' && <><Globe className="w-4 h-4" /> HTTP Stream</>}
+                {selectedSource === 'rtmp' && <><Radio className="w-4 h-4" /> RTMP Stream</>}
+                {selectedSource === 'screen' && <><Monitor className="w-4 h-4" /> Screen Capture</>}
+                {selectedSource === 'upload' && <><Upload className="w-4 h-4" /> Upload Photos</>}
+                {selectedSource === 'import' && <><FolderOpen className="w-4 h-4" /> Import from Path</>}
+                <ChevronDown className="w-4 h-4" />
+              </button>
+
+              {sourceDropdownOpen && (
+                <div className="absolute top-full left-0 mt-1 bg-purple-600 rounded-lg border border-white/20 min-w-full z-50">
+                  <button
+                    onClick={() => { setSelectedSource('rtsp'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2 first:rounded-t-lg"
+                  >
+                    <Settings className="w-4 h-4" />
+                    RTSP Stream
+                  </button>
+                  <button
+                    onClick={() => { setSelectedSource('video_devices'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                  >
+                    <Camera className="w-4 h-4" />
+                    Video Devices
+                  </button>
+                  <button
+                    onClick={() => { setSelectedSource('http'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                  >
+                    <Globe className="w-4 h-4" />
+                    HTTP Stream
+                  </button>
+                  <button
+                    onClick={() => { setSelectedSource('rtmp'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                  >
+                    <Radio className="w-4 h-4" />
+                    RTMP Stream
+                  </button>
+                  <button
+                    onClick={() => { setSelectedSource('screen'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                  >
+                    <Monitor className="w-4 h-4" />
+                    Screen Capture
+                  </button>
+                  <button
+                    onClick={() => { setSelectedSource('upload'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Upload Photos
+                  </button>
+                  <button
+                    onClick={() => { setSelectedSource('import'); setSourceDropdownOpen(false); }}
+                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2 last:rounded-b-lg"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    Import from Path
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Trigger Type Selector - Only show for live sources */}
+            {(selectedSource === 'rtsp' || selectedSource === 'video_devices' || selectedSource === 'http' || selectedSource === 'rtmp' || selectedSource === 'screen') && (
+              <div className="flex bg-white/5 rounded-md p-1">
+                <button
+                  onClick={() => setSelectedTrigger('timed')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1 ${
+                    selectedTrigger === 'timed'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-gray-300 hover:text-white'
+                  }`}
+                >
+                  <Clock className="w-3 h-3" />
+                  Timed
+                </button>
+                <button
+                  onClick={() => setSelectedTrigger('mqtt')}
+                  className={`px-3 py-1 rounded transition-colors flex items-center gap-1 ${
+                    selectedTrigger === 'mqtt'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-gray-300 hover:text-white'
+                  }`}
+                >
+                  <Zap className="w-3 h-3" />
+                  MQTT
+                </button>
+              </div>
+            )}
+
+            {/* Static tabs for non-live sources */}
             <button
-              onClick={() => setActiveTab('rtsp')}
-              className={`px-6 py-2 rounded-md transition-colors ${
-                activeTab === 'rtsp' 
-                  ? 'bg-purple-600 text-white' 
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <Settings className="w-4 h-4 inline mr-2" />
-              RTSP Stream
-            </button>
-            <button
-              onClick={() => setActiveTab('upload')}
-              className={`px-6 py-2 rounded-md transition-colors ${
-                activeTab === 'upload' 
-                  ? 'bg-purple-600 text-white' 
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <Upload className="w-4 h-4 inline mr-2" />
-              Upload Photos
-            </button>
-            <button
-              onClick={() => setActiveTab('import')}
-              className={`px-6 py-2 rounded-md transition-colors ${
-                activeTab === 'import' 
-                  ? 'bg-purple-600 text-white' 
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <FolderOpen className="w-4 h-4 inline mr-2" />
-              Import from Path
-            </button>
-            <button
-              onClick={() => setActiveTab('mqtt')}
-              className={`px-6 py-2 rounded-md transition-colors ${
-                activeTab === 'mqtt' 
-                  ? 'bg-purple-600 text-white' 
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <Wifi className="w-4 h-4 inline mr-2" />
-              MQTT Trigger
-            </button>
-            <button
-              onClick={() => setActiveTab('sessions')}
-              className={`px-6 py-2 rounded-md transition-colors ${
-                activeTab === 'sessions' 
-                  ? 'bg-purple-600 text-white' 
+              onClick={() => setShowSessions(!showSessions)}
+              className={`px-4 py-2 rounded-md transition-colors whitespace-nowrap ${
+                showSessions
+                  ? 'bg-purple-600 text-white'
                   : 'text-gray-300 hover:text-white'
               }`}
             >
@@ -605,8 +857,388 @@ function App() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* RTSP Tab Content */}
-          {activeTab === 'rtsp' && (
+          {/* Live Source Content - Combined with trigger type */}
+          {!showSessions && (selectedSource === 'video_devices' || (activeTab === 'video_devices' && selectedTrigger === 'timed')) && selectedTrigger === 'timed' && (
+            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+              <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+                <Camera className="w-5 h-5" />
+                Video Device Configuration
+              </h2>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Video Device
+                  </label>
+                  <select
+                    value={usbDevicePath}
+                    onChange={(e) => setUsbDevicePath(e.target.value)}
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    {loadingDevices ? (
+                      <option>Loading devices...</option>
+                    ) : availableDevices?.usbCameras?.length > 0 || availableDevices?.captureCards?.length > 0 ? (
+                      <>
+                        {availableDevices.usbCameras?.map((device) => (
+                          <option key={device.path} value={device.path}>
+                            {device.name} (Camera)
+                          </option>
+                        ))}
+                        {availableDevices.captureCards?.map((device) => (
+                          <option key={device.path} value={device.path}>
+                            {device.name} (Capture Card)
+                          </option>
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        <option value="/dev/video0">/dev/video0 (Default)</option>
+                        <option value="/dev/video1">/dev/video1 (Default)</option>
+                      </>
+                    )}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Select any available video device (USB cameras, webcams, capture cards, etc.)
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      Resolution
+                    </label>
+                    <select
+                      value={usbResolution}
+                      onChange={(e) => setUsbResolution(e.target.value)}
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="640x480">640x480 (VGA)</option>
+                      <option value="720x480">720x480 (NTSC)</option>
+                      <option value="720x576">720x576 (PAL)</option>
+                      <option value="1280x720">1280x720 (HD)</option>
+                      <option value="1920x1080">1920x1080 (Full HD)</option>
+                      <option value="3840x2160">3840x2160 (4K)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      Format
+                    </label>
+                    <select
+                      value={usbFormat}
+                      onChange={(e) => setUsbFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mjpeg">MJPEG</option>
+                      <option value="yuyv">YUYV</option>
+                      <option value="h264">H.264</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    FPS
+                  </label>
+                  <input
+                    type="number"
+                    value={usbFps}
+                    onChange={(e) => setUsbFps(Math.max(1, parseInt(e.target.value) || 30))}
+                    min="1"
+                    max="60"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  {!isCapturing ? (
+                    <button
+                      onClick={startCapture}
+                      className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Play className="w-5 h-5" />
+                      Start Video Capture
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopCapture}
+                      className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Square className="w-5 h-5" />
+                      Stop Capture
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-center text-white">
+                  <p className="text-sm">Snapshots captured: {snapshots.length}</p>
+                </div>
+
+                <button
+                  onClick={generateTimelapse}
+                  disabled={snapshots.length < 2 || processing || isCapturing}
+                  className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
+                >
+                  {processing ? 'Processing...' : 'Generate Timelapse'}
+                </button>
+
+                {videoUrl && sessionId && (
+                  <a
+                    href={`${API_URL}/api/download/video/${sessionId}`}
+                    className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
+                  >
+                    <Download className="w-5 h-5 inline mr-2" />
+                    Download Video
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* HTTP Stream Tab Content - Timed */}
+          {!showSessions && selectedSource === 'http' && selectedTrigger === 'timed' && (
+            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+              <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+                <Globe className="w-5 h-5" />
+                HTTP Stream Configuration
+              </h2>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Stream URL
+                  </label>
+                  <input
+                    type="text"
+                    value={httpStreamUrl}
+                    onChange={(e) => setHttpStreamUrl(e.target.value)}
+                    placeholder="http://camera.example.com/mjpeg"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Stream Format
+                  </label>
+                  <select
+                    value={httpStreamFormat}
+                    onChange={(e) => setHttpStreamFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mjpeg">MJPEG</option>
+                    <option value="hls">HLS (m3u8)</option>
+                    <option value="dash">DASH</option>
+                  </select>
+                </div>
+
+                <div className="flex gap-2">
+                  {!isCapturing ? (
+                    <button
+                      onClick={startCapture}
+                      disabled={!httpStreamUrl}
+                      className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Play className="w-5 h-5" />
+                      Start HTTP Capture
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopCapture}
+                      className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Square className="w-5 h-5" />
+                      Stop Capture
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-center text-white">
+                  <p className="text-sm">Snapshots captured: {snapshots.length}</p>
+                </div>
+
+                <button
+                  onClick={generateTimelapse}
+                  disabled={snapshots.length < 2 || processing || isCapturing}
+                  className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
+                >
+                  {processing ? 'Processing...' : 'Generate Timelapse'}
+                </button>
+
+                {videoUrl && sessionId && (
+                  <a
+                    href={`${API_URL}/api/download/video/${sessionId}`}
+                    className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
+                  >
+                    <Download className="w-5 h-5 inline mr-2" />
+                    Download Video
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* RTMP Stream Tab Content - Timed */}
+          {!showSessions && selectedSource === 'rtmp' && selectedTrigger === 'timed' && (
+            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+              <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+                <Radio className="w-5 h-5" />
+                RTMP Stream Configuration
+              </h2>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    RTMP URL
+                  </label>
+                  <input
+                    type="text"
+                    value={rtmpStreamUrl}
+                    onChange={(e) => setRtmpStreamUrl(e.target.value)}
+                    placeholder="rtmp://server/app/stream"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  {!isCapturing ? (
+                    <button
+                      onClick={startCapture}
+                      disabled={!rtmpStreamUrl}
+                      className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Play className="w-5 h-5" />
+                      Start RTMP Capture
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopCapture}
+                      className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Square className="w-5 h-5" />
+                      Stop Capture
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-center text-white">
+                  <p className="text-sm">Snapshots captured: {snapshots.length}</p>
+                </div>
+
+                <button
+                  onClick={generateTimelapse}
+                  disabled={snapshots.length < 2 || processing || isCapturing}
+                  className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
+                >
+                  {processing ? 'Processing...' : 'Generate Timelapse'}
+                </button>
+
+                {videoUrl && sessionId && (
+                  <a
+                    href={`${API_URL}/api/download/video/${sessionId}`}
+                    className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
+                  >
+                    <Download className="w-5 h-5 inline mr-2" />
+                    Download Video
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Screen Capture Tab Content - Timed */}
+          {!showSessions && selectedSource === 'screen' && selectedTrigger === 'timed' && (
+            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+              <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+                <Monitor className="w-5 h-5" />
+                Screen Capture Configuration
+              </h2>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Display
+                  </label>
+                  <select
+                    value={screenDisplay}
+                    onChange={(e) => setScreenDisplay(e.target.value)}
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    {availableDevices?.screens?.length > 0 ? (
+                      availableDevices.screens.map((screen) => (
+                        <option key={screen.display} value={screen.display}>
+                          {screen.name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value=":0.0">:0.0 (Primary Display)</option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Region (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={screenRegion}
+                    onChange={(e) => setScreenRegion(e.target.value)}
+                    placeholder="1920x1080+0+0"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Format: WIDTHxHEIGHT+X+Y (leave empty for full screen)
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  {!isCapturing ? (
+                    <button
+                      onClick={startCapture}
+                      className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Play className="w-5 h-5" />
+                      Start Screen Capture
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopCapture}
+                      className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <Square className="w-5 h-5" />
+                      Stop Capture
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-center text-white">
+                  <p className="text-sm">Snapshots captured: {snapshots.length}</p>
+                </div>
+
+                <button
+                  onClick={generateTimelapse}
+                  disabled={snapshots.length < 2 || processing || isCapturing}
+                  className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
+                >
+                  {processing ? 'Processing...' : 'Generate Timelapse'}
+                </button>
+
+                {videoUrl && sessionId && (
+                  <a
+                    href={`${API_URL}/api/download/video/${sessionId}`}
+                    className="block w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-center transition-colors"
+                  >
+                    <Download className="w-5 h-5 inline mr-2" />
+                    Download Video
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* RTSP Tab Content - Timed */}
+          {!showSessions && selectedSource === 'rtsp' && selectedTrigger === 'timed' && (
             <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
               <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
                 <Settings className="w-5 h-5" />
@@ -737,7 +1369,7 @@ function App() {
           )}
 
           {/* Upload Photos Tab Content */}
-          {activeTab === 'upload' && (
+          {!showSessions && selectedSource === 'upload' && (
             <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
               <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
                 <Upload className="w-5 h-5" />
@@ -784,7 +1416,7 @@ function App() {
                         <img
                           key={index}
                           src={`${API_URL}${file.thumbnail}`}
-                          alt="Uploaded photo"
+                          alt={`Uploaded photo ${index + 1}`}
                           className="w-full aspect-video object-cover rounded border border-white/20"
                         />
                       ))}
@@ -818,33 +1450,60 @@ function App() {
           )}
 
           {/* Import from Path Tab Content */}
-          {activeTab === 'import' && (
+          {!showSessions && selectedSource === 'import' && (
             <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
               <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
                 <FolderOpen className="w-5 h-5" />
-                Import from Network Path
+                Import from Directory
               </h2>
 
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-white mb-2">
-                    Network Path
+                    Parent Directory Path
                   </label>
                   <input
                     type="text"
                     value={networkPath}
-                    onChange={(e) => setNetworkPath(e.target.value)}
-                    placeholder="/path/to/photos or \\server\share\photos"
+                    onChange={(e) => {
+                      setNetworkPath(e.target.value);
+                      loadChildDirectories(e.target.value);
+                    }}
+                    placeholder="/path/to/parent/directory"
                     className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    Enter the full path to a directory containing image files
+                    Enter the parent directory path. If IMPORT_PARENT_PATH is set in environment, it will auto-populate.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Child Directory
+                  </label>
+                  <select
+                    value={selectedChildDirectory}
+                    onChange={(e) => setSelectedChildDirectory(e.target.value)}
+                    disabled={loadingDirectories || childDirectories.length === 0}
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+                  >
+                    <option value="">
+                      {loadingDirectories ? 'Loading directories...' : 'Select a child directory'}
+                    </option>
+                    {childDirectories.map((dir) => (
+                      <option key={dir} value={dir}>
+                        {dir}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Select the child directory containing your image files
                   </p>
                 </div>
 
                 <button
                   onClick={handleImportFromPath}
-                  disabled={!networkPath.trim() || importing}
+                  disabled={!networkPath.trim() || !selectedChildDirectory || importing}
                   className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
                 >
                   {importing ? 'Importing...' : 'Import Photos'}
@@ -858,7 +1517,7 @@ function App() {
                         <img
                           key={index}
                           src={`${API_URL}${file.thumbnail}`}
-                          alt="Imported photo"
+                          alt={`Imported photo ${index + 1}`}
                           className="w-full aspect-video object-cover rounded border border-white/20"
                         />
                       ))}
@@ -891,12 +1550,12 @@ function App() {
             </div>
           )}
 
-          {/* MQTT Tab Content */}
-          {activeTab === 'mqtt' && (
+          {/* MQTT Tab Content - For MQTT trigger */}
+          {!showSessions && selectedTrigger === 'mqtt' && (selectedSource === 'rtsp' || selectedSource === 'video_devices' || selectedSource === 'http' || selectedSource === 'rtmp' || selectedSource === 'screen') && (
             <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
               <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
                 <Wifi className="w-5 h-5" />
-                MQTT Trigger Configuration
+                MQTT Trigger Configuration - {selectedSource.replace('_', ' ').toUpperCase()}
               </h2>
 
               <div className="space-y-4">
@@ -927,41 +1586,147 @@ function App() {
                 </div>
 
                 <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <input
-                      type="checkbox"
-                      checked={mqttUseSharedUrl}
-                      onChange={(e) => setMqttUseSharedUrl(e.target.checked)}
-                      className="w-4 h-4 rounded"
-                    />
-                    <label className="text-sm font-medium text-white">Use RTSP URL from Stream tab</label>
-                  </div>
-                  
                   <label className="block text-sm font-medium text-white mb-2">
-                    RTSP Stream URL
+                    Video Source Type
                   </label>
-                  <input
-                    type="text"
-                    value={mqttUseSharedUrl ? url : mqttRtspUrl}
-                    onChange={(e) => setMqttRtspUrl(e.target.value)}
-                    disabled={mqttUseSharedUrl}
-                    placeholder="rtsp://username:password@camera.example.com:554/stream"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    The video stream to capture from when MQTT trigger fires
-                  </p>
-                  
+                  <select
+                    value={mqttSourceType}
+                    onChange={(e) => setMqttSourceType(e.target.value)}
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="rtsp">RTSP Stream</option>
+                    <option value="usb_camera">USB Camera</option>
+                    <option value="capture_card">Capture Card</option>
+                    <option value="http_stream">HTTP Stream</option>
+                    <option value="rtmp_stream">RTMP Stream</option>
+                    <option value="screen_capture">Screen Capture</option>
+                  </select>
+                </div>
+
+                {/* Dynamic source configuration based on selected type */}
+                {selectedSource === 'rtsp' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        type="checkbox"
+                        checked={mqttUseSharedUrl}
+                        onChange={(e) => setMqttUseSharedUrl(e.target.checked)}
+                        className="w-4 h-4 rounded"
+                      />
+                      <label className="text-sm font-medium text-white">Use RTSP URL from Stream tab</label>
+                    </div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      RTSP Stream URL
+                    </label>
+                    <input
+                      type="text"
+                      value={mqttUseSharedUrl ? url : mqttRtspUrl}
+                      onChange={(e) => setMqttRtspUrl(e.target.value)}
+                      disabled={mqttUseSharedUrl}
+                      placeholder="rtsp://username:password@camera.example.com:554/stream"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                )}
+
+                {selectedSource === 'video_devices' && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      Video Device
+                    </label>
+                    <select
+                      value={mqttUsbDevice}
+                      onChange={(e) => setMqttUsbDevice(e.target.value)}
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      {availableDevices?.usbCameras?.length > 0 || availableDevices?.captureCards?.length > 0 ? (
+                        <>
+                          {availableDevices.usbCameras?.map((device) => (
+                            <option key={device.path} value={device.path}>
+                              {device.name} (Camera)
+                            </option>
+                          ))}
+                          {availableDevices.captureCards?.map((device) => (
+                            <option key={device.path} value={device.path}>
+                              {device.name} (Capture Card)
+                            </option>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          <option value="/dev/video0">/dev/video0 (Default)</option>
+                          <option value="/dev/video1">/dev/video1 (Default)</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                )}
+
+                {selectedSource === 'http' && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      HTTP Stream URL
+                    </label>
+                    <input
+                      type="text"
+                      value={mqttHttpUrl}
+                      onChange={(e) => setMqttHttpUrl(e.target.value)}
+                      placeholder="http://camera.example.com/mjpeg"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+
+                {selectedSource === 'rtmp' && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      RTMP Stream URL
+                    </label>
+                    <input
+                      type="text"
+                      value={mqttRtmpUrl}
+                      onChange={(e) => setMqttRtmpUrl(e.target.value)}
+                      placeholder="rtmp://server/app/stream"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+
+                {selectedSource === 'screen' && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      Display
+                    </label>
+                    <select
+                      value={mqttScreenDisplay}
+                      onChange={(e) => setMqttScreenDisplay(e.target.value)}
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      {availableDevices?.screens?.length > 0 ? (
+                        availableDevices.screens.map((screen) => (
+                          <option key={screen.display} value={screen.display}>
+                            {screen.name}
+                          </option>
+                        ))
+                      ) : (
+                        <option value=":0.0">:0.0 (Primary Display)</option>
+                      )}
+                    </select>
+                  </div>
+                )}
+
+                {/* Test connection button for the selected source */}
+                {(selectedSource === 'rtsp' || selectedSource === 'http') && (
                   <button
                     onClick={testMqttConnection}
-                    disabled={testingMqttConnection || (!mqttUseSharedUrl && !mqttRtspUrl) || (mqttUseSharedUrl && !url)}
-                    className="w-full mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    disabled={testingMqttConnection || (selectedSource === 'rtsp' && !mqttUseSharedUrl && !mqttRtspUrl) || (selectedSource === 'rtsp' && mqttUseSharedUrl && !url) || (selectedSource === 'http' && !mqttHttpUrl)}
+                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
                   >
-                    {testingMqttConnection ? 'Testing...' : 'Test RTSP Connection'}
+                    {testingMqttConnection ? 'Testing...' : `Test ${selectedSource.toUpperCase()} Connection`}
                     {mqttConnectionStatus === 'success' && <CheckCircle className="w-5 h-5 text-green-400" />}
                     {mqttConnectionStatus === 'error' && <XCircle className="w-5 h-5 text-red-400" />}
                   </button>
-                </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -993,8 +1758,8 @@ function App() {
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
                   <h3 className="text-blue-300 font-semibold mb-2">How it works:</h3>
                   <p className="text-sm text-blue-200">
-                    The system will capture a photo from the specified RTSP stream when the MQTT message changes from '1' to '0' on the specified topic.
-                    This is useful for motion sensors, door triggers, or other binary sensors that need to trigger camera captures.
+                    The system will capture a photo from the selected video source when the MQTT message changes from '1' to '0' on the specified topic.
+                    This works with any live video source: RTSP streams, USB cameras, capture cards, HTTP streams, RTMP streams, or screen capture.
                   </p>
                 </div>
 
@@ -1002,7 +1767,7 @@ function App() {
                   {!mqttConnected ? (
                     <button
                       onClick={startMqttCapture}
-                      disabled={!mqttBrokerUrl || !mqttTopic || (!mqttUseSharedUrl && !mqttRtspUrl) || (mqttUseSharedUrl && !url) || mqttTesting}
+                      disabled={!mqttBrokerUrl || !mqttTopic || mqttTesting}
                       className="flex-1 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
                     >
                       <Wifi className="w-5 h-5" />
@@ -1027,6 +1792,9 @@ function App() {
                     </div>
                     <p className="text-sm text-green-200">
                       Listening on topic: <code className="bg-green-500/20 px-1 rounded">{mqttTopic}</code>
+                    </p>
+                    <p className="text-sm text-green-200 mt-1">
+                      Source: <code className="bg-green-500/20 px-1 rounded">{selectedSource.replace('_', ' ').toUpperCase()}</code>
                     </p>
                     {mqttLastMessage && (
                       <p className="text-sm text-green-200 mt-1">
@@ -1062,8 +1830,8 @@ function App() {
           )}
 
           {/* Sessions Management Tab Content */}
-          {activeTab === 'sessions' && (
-            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+          {showSessions && (
+            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 col-span-full">
               <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
                 <Database className="w-5 h-5" />
                 Sessions Management
@@ -1160,6 +1928,7 @@ function App() {
                               <div className="text-sm text-gray-300 space-y-1">
                                 <div>ID: {session.id.substring(0, 8)}...</div>
                                 <div>Created: {new Date(session.created_at).toLocaleString()}</div>
+                                <div>Source: {session.source_type}</div>
                                 <div>Snapshots: {session.snapshot_count}</div>
                                 <div>Videos: {session.video_count}</div>
                                 <div>Size: {Math.round((session.total_snapshot_size || 0) / 1024 / 1024)}MB</div>
@@ -1179,7 +1948,16 @@ function App() {
                                   className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
                                 >
                                   <Download className="w-3 h-3" />
-                                  Download
+                                  Download Video
+                                </a>
+                              )}
+                              {session.snapshot_count > 0 && (
+                                <a
+                                  href={`${API_URL}/api/download/photos/${session.id}`}
+                                  className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Download Photos
                                 </a>
                               )}
                               <button
@@ -1200,8 +1978,9 @@ function App() {
             </div>
           )}
 
-          <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-            <h2 className="text-xl font-semibold text-white mb-4">Preview</h2>
+          {!showSessions && (
+            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+              <h2 className="text-xl font-semibold text-white mb-4">Preview</h2>
             
             <div className="space-y-4">
               <div className="bg-black rounded-lg overflow-hidden aspect-video flex items-center justify-center">
@@ -1221,24 +2000,74 @@ function App() {
               {snapshots.length > 0 && (
                 <div className="mt-4">
                   <h3 className="text-sm font-medium text-white mb-2">
-                    Recent Snapshots ({snapshots.length} total)
+                    Recent Snapshots ({snapshots.length} total) - Ordered by capture time
                   </h3>
                   <div className="grid grid-cols-4 gap-2 max-h-64 overflow-y-auto">
                     {snapshots.slice(-12).reverse().map((snap) => (
-                      <img
-                        key={snap.timestamp}
-                        src={snap.url}
-                        alt="Snapshot"
-                        className="w-full aspect-video object-cover rounded border border-white/20"
-                      />
+                      <div key={snap.timestamp} className="relative group">
+                        <img
+                          src={snap.url}
+                          alt="Snapshot"
+                          className="w-full aspect-video object-cover rounded border border-white/20"
+                        />
+                        {snap.capturedAt && (
+                          <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs p-1 rounded-b opacity-0 group-hover:opacity-100 transition-opacity">
+                            {snap.capturedAt}
+                          </div>
+                        )}
+                        {/* Download button overlay */}
+                        <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => {
+                              const filename = snap.url.split('/').pop();
+                              const link = document.createElement('a');
+                              link.href = `${API_URL}/api/download/photo/${sessionId}/${filename}`;
+                              link.download = filename;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                            }}
+                            className="bg-blue-600 hover:bg-blue-700 text-white p-1 rounded-full shadow-lg"
+                            title="Download this photo"
+                          >
+                            <Download className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
                     ))}
+                  </div>
+                  {/* Download all photos button */}
+                  <div className="mt-4 flex justify-center">
+                    <a
+                      href={`${API_URL}/api/download/photos/${sessionId}`}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download All Photos (ZIP)
+                    </a>
                   </div>
                 </div>
               )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
+
+      {/* Footer */}
+      <footer className="mt-8 text-center text-gray-400 text-sm">
+        <p>
+          Dreamt up by{' '}
+          <a
+            href="https://rg3d.me"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-purple-400 hover:text-purple-300 transition-colors"
+          >
+            rg3d.me
+          </a>
+        </p>
+      </footer>
     </div>
   );
 }

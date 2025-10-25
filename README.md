@@ -8,9 +8,14 @@ Transform camera streams, uploaded photos, and MQTT-triggered captures into time
 
 ### 📹 **Multiple Input Sources**
 - **RTSP Streams** - Connect to any IP camera with RTSP protocol
-- **Photo Upload** - Drag-and-drop interface for uploading image collections (WIP/UNTESTED)
-- **Network Import** - Import photos from network paths and shared folders (WIP/UNTESTED)
-- **MQTT Triggers** - Capture photos based on MQTT message transitions (1→0) (WIP/UNTESTED)
+- **USB Cameras** - Direct access to webcams and USB video devices
+- **Capture Cards** - HDMI/SDI capture cards for professional video input
+- **HTTP Streams** - MJPEG, HLS, and DASH streaming protocols
+- **RTMP Streams** - Live streaming from RTMP sources
+- **Screen Capture** - Desktop and application window recording
+- **Photo Upload** - Drag-and-drop interface for uploading image collections
+- **Network Import** - Import photos from network paths and shared folders
+- **MQTT Triggers** - Capture photos from any source based on MQTT message transitions (1→0)
 
 ### 🎛️ **Advanced Management**
 - **Database Integration** - SQLite database for session tracking and metadata storage
@@ -103,13 +108,16 @@ The application provides multiple ways to create timelapses:
 
 ### 📡 **MQTT Trigger**
 1. **Switch to "MQTT Trigger" tab**
-2. **Configure MQTT settings:**
+2. **Select video source type:**
+   - RTSP Stream, USB Camera, Capture Card, HTTP Stream, RTMP Stream, or Screen Capture
+3. **Configure source-specific settings** (device path, URL, etc.)
+4. **Configure MQTT settings:**
    - **Broker URL**: `mqtt://broker.example.com:1883`
    - **Topic**: `sensor/trigger`
    - **Credentials** (optional): username and password
-3. **Start MQTT capture** to listen for messages
-4. **Photos are captured** when message changes from '1' to '0'
-5. **Perfect for motion sensors, door triggers, etc.**
+5. **Start MQTT capture** to listen for messages
+6. **Photos are captured** from your selected source when message changes from '1' to '0'
+7. **Perfect for motion sensors, door triggers, etc.**
 
 ### 🎬 **Timelapse Generation**
 1. **Generate timelapse** once you have at least 2 snapshots
@@ -282,19 +290,52 @@ DEFAULT_RETENTION_DAYS=7
 
 ### ✅ **Completed Features**
 - [x] **Database Integration** - SQLite database with session tracking
-- [x] **Photo Upload** - Drag-and-drop interface with thumbnails (UNTESTED)
-- [x] **Network Import** - Import from network paths (UNTESTED)
-- [x] **MQTT Triggers** - Message-based photo capture (UNTESTED)
+- [x] **Photo Upload** - Drag-and-drop interface with thumbnails
+- [x] **Network Import** - Import from network paths
+- [x] **MQTT Triggers** - Message-based photo capture from any video source
 - [x] **Storage Management** - Quotas, cleanup, and session management
 - [x] **Session Persistence** - All data survives restarts
+- [x] **Universal Video Input** - USB cameras, capture cards, HTTP/RTMP streams, screen capture
+- [x] **Multi-Source MQTT** - MQTT triggers work with all video source types
 
 ### 🚀 **Future Enhancements**
-- [ ] **Universal Video Input** - USB cameras, capture cards, HTTP streams
 - [ ] **Multi-Camera Support** - Simultaneous capture from multiple sources
 - [ ] **Scheduled Captures** - Cron-like scheduling for automated timelapses
 - [ ] **Cloud Storage** - S3, Google Cloud Storage integration
 - [ ] **Video Quality Options** - Advanced encoding settings
 - [ ] **User Authentication** - Multi-user support with accounts
+
+## Dependencies
+
+This project relies on the following open source software:
+
+### Backend
+- [Express](https://expressjs.com/) - MIT License
+- [FFmpeg](https://ffmpeg.org/) - GPL/LGPL
+- [Fluent-FFmpeg](https://github.com/fluent-ffmpeg/node-fluent-ffmpeg) - MIT License
+- [Sharp](https://sharp.pixelplumbing.com/) - Apache 2.0 License
+- [Better-SQLite3](https://github.com/WiseLibs/better-sqlite3) - MIT License
+- [MQTT.js](https://github.com/mqttjs/MQTT.js) - MIT License
+- [Node-cron](https://github.com/node-cron/node-cron) - MIT License
+- [Archiver](https://github.com/archiverjs/node-archiver) - MIT License
+- [Multer](https://github.com/expressjs/multer) - MIT License
+- [UUID](https://github.com/uuidjs/uuid) - MIT License
+- [WS](https://github.com/websockets/ws) - MIT License
+- [CORS](https://github.com/expressjs/cors) - MIT License
+
+### Frontend
+- [React](https://reactjs.org/) - MIT License
+- [Tailwind CSS](https://tailwindcss.com/) - MIT License
+- [Lucide React](https://lucide.dev/) - ISC License
+- [Web Vitals](https://github.com/GoogleChrome/web-vitals) - Apache 2.0 License
+- [UUID](https://github.com/uuidjs/uuid) - MIT License
+
+### Infrastructure
+- [Docker](https://www.docker.com/) - Apache 2.0 License
+- [Node.js](https://nodejs.org/) - MIT License
+- [Nginx](https://nginx.org/) - BSD License
+
+For full license texts, see the respective project repositories.
 
 ## License
 

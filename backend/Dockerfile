@@ -1,15 +1,21 @@
-FROM node:18-alpine
+FROM node:18-slim
 
-# Install FFmpeg
-RUN apk add --no-cache ffmpeg
+# Install FFmpeg and required dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --production
+# Install dependencies and rebuild native modules
+RUN npm install --production && \
+    npm rebuild better-sqlite3 sharp
 
 # Copy application files
 COPY . .

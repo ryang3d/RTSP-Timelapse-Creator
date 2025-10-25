@@ -30,13 +30,24 @@ class DatabaseManager {
       )
     `);
 
-    // Sessions table
+    // Sessions table with expanded source types
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
-        source_type TEXT NOT NULL DEFAULT 'rtsp',
+        source_type TEXT NOT NULL DEFAULT 'rtsp' CHECK (source_type IN (
+          'rtsp',           -- IP camera RTSP streams
+          'usb_camera',     -- USB webcams and cameras
+          'capture_card',   -- Video capture cards
+          'http_stream',    -- HTTP/MJPEG/HLS streams
+          'rtmp_stream',    -- RTMP live streams
+          'screen_capture', -- Desktop/screen recording
+          'video_file',     -- File-based video sources
+          'upload',         -- Uploaded photos
+          'import',         -- Imported photos
+          'mqtt'            -- MQTT-triggered capture (legacy)
+        )),
         source_config TEXT, -- JSON string for source-specific settings
-        rtsp_url TEXT,
+        rtsp_url TEXT,      -- Legacy field, kept for backward compatibility
         interval_seconds INTEGER NOT NULL,
         duration_seconds INTEGER,
         use_timer BOOLEAN DEFAULT 0,
@@ -188,16 +199,17 @@ class DatabaseManager {
   // Snapshot management
   addSnapshot(sessionId, filePath, metadata = {}) {
     const stmt = this.db.prepare(`
-      INSERT INTO snapshots (session_id, file_path, file_size, width, height)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO snapshots (session_id, file_path, file_size, width, height, captured_at)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
-    
+
     return stmt.run(
       sessionId,
       filePath,
       metadata.file_size || null,
       metadata.width || null,
-      metadata.height || null
+      metadata.height || null,
+      metadata.captured_at || new Date().toISOString()
     );
   }
 

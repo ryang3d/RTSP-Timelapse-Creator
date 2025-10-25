@@ -9,11 +9,13 @@ const multer = require('multer');
 const sharp = require('sharp');
 const mqtt = require('mqtt');
 const cron = require('node-cron');
+const archiver = require('archiver');
 const DatabaseManager = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const WS_PORT = process.env.WS_PORT || 3002;
+const DEFAULT_PARENT_PATH = process.env.IMPORT_PARENT_PATH || '';
 
 app.use(cors());
 app.use(express.json());
@@ -33,6 +35,129 @@ const activeCaptures = new Map();
 
 // MQTT client management
 const mqttClients = new Map();
+
+// Unified capture function for all source types
+async function captureFromSource(sessionId, sourceConfig) {
+  const session = db.getSession(sessionId);
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+
+  const config = typeof sourceConfig === 'string' ?
+    JSON.parse(sourceConfig) : sourceConfig;
+
+  const sessionDir = path.join(snapshotsDir, sessionId);
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+
+  const snapshotFile = path.join(sessionDir, `snapshot-${Date.now()}.jpg`);
+
+  // Build FFmpeg command based on source type
+  let command;
+
+  switch (session.source_type) {
+    case 'rtsp':
+      command = buildRtspCapture(config.rtspUrl || config.url, snapshotFile);
+      break;
+    case 'usb_camera':
+    case 'capture_card':
+      command = buildV4L2Capture(config, snapshotFile);
+      break;
+    case 'http_stream':
+      command = buildHttpCapture(config, snapshotFile);
+      break;
+    case 'rtmp_stream':
+      command = buildRtmpCapture(config.rtmpUrl || config.url, snapshotFile);
+      break;
+    case 'screen_capture':
+      command = buildScreenCapture(config, snapshotFile);
+      break;
+    default:
+      throw new Error(`Unsupported source type: ${session.source_type}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    command
+      .on('end', () => resolve(snapshotFile))
+      .on('error', (err) => reject(err))
+      .run();
+  });
+}
+
+// FFmpeg command builders for different source types
+function buildRtspCapture(rtspUrl, outputFile) {
+  return ffmpeg(rtspUrl)
+    .inputOptions([
+      '-rtsp_transport', 'tcp',
+      '-timeout', '5000000',
+      '-analyzeduration', '2000000',
+      '-probesize', '2000000'
+    ])
+    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .output(outputFile);
+}
+
+function buildV4L2Capture(config, outputFile) {
+  const { devicePath, format, resolution, fps } = config;
+
+  const inputOptions = [
+    '-f v4l2',
+    format ? `-input_format ${format}` : '',
+    resolution ? `-video_size ${resolution}` : '',
+    fps ? `-framerate ${fps}` : '-framerate 30'
+  ].filter(Boolean);
+
+  return ffmpeg(devicePath)
+    .inputOptions(inputOptions)
+    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .output(outputFile);
+}
+
+function buildHttpCapture(config, outputFile) {
+  const { httpUrl, streamFormat } = config;
+
+  const inputOptions = streamFormat === 'hls'
+    ? ['-live_start_index -1', '-timeout 10000000']
+    : ['-timeout 10000000'];
+
+  return ffmpeg(httpUrl)
+    .inputOptions(inputOptions)
+    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .output(outputFile);
+}
+
+function buildRtmpCapture(rtmpUrl, outputFile) {
+  return ffmpeg(rtmpUrl)
+    .inputOptions(['-timeout 10000000'])
+    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .output(outputFile);
+}
+
+function buildScreenCapture(config, outputFile) {
+  const { display, region } = config;
+  const platform = process.platform;
+
+  if (platform === 'linux') {
+    const inputOptions = ['-f x11grab'];
+    if (region) {
+      inputOptions.push(`-video_size ${region}`);
+    }
+
+    return ffmpeg(display || ':0.0')
+      .inputOptions(inputOptions)
+      .outputOptions(['-frames:v 1', '-q:v 2'])
+      .output(outputFile);
+  } else if (platform === 'win32') {
+    return ffmpeg()
+      .input('desktop')
+      .inputFormat('gdigrab')
+      .outputOptions(['-frames:v 1', '-q:v 2'])
+      .output(outputFile);
+  } else {
+    throw new Error(`Screen capture not supported on platform: ${platform}`);
+  }
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -86,56 +211,107 @@ function broadcast(data) {
 
 app.post('/api/test-connection', async (req, res) => {
   const { url } = req.body;
-  const testFile = path.join(snapshotsDir, `test-${Date.now()}.jpg`);
+  
+  if (!url || !url.trim()) {
+    return res.status(400).json({ success: false, message: 'RTSP URL is required' });
+  }
 
+  const testFile = path.join(snapshotsDir, `test-${Date.now()}.jpg`);
   let responseHandled = false;
+  
+  // Cleanup function to ensure test file is always deleted
+  const cleanup = () => {
+    try {
+      if (fs.existsSync(testFile)) {
+        fs.unlinkSync(testFile);
+        console.log('Cleaned up test file:', testFile);
+      }
+    } catch (err) {
+      console.error('Error cleaning up test file:', err.message);
+    }
+  };
+
   const timeout = setTimeout(() => {
     if (!responseHandled) {
       responseHandled = true;
-      res.status(400).json({ success: false, message: 'Connection timeout - unable to reach RTSP stream' });
+      cleanup();
+      console.error('RTSP connection test timed out for URL:', url);
+      res.status(400).json({ success: false, message: 'Connection timeout - unable to reach RTSP stream within 15 seconds' });
     }
   }, 15000); // 15 second timeout
 
-  ffmpeg(url)
-    .inputOptions([
-      '-rtsp_transport', 'tcp',
-      '-timeout', '5000000', // 5 second timeout in microseconds
-      '-analyzeduration', '2000000',
-      '-probesize', '2000000'
-    ])
-    .outputOptions(['-frames:v 1', '-q:v 2'])
-    .output(testFile)
-    .on('end', () => {
-      clearTimeout(timeout);
-      if (!responseHandled) {
-        responseHandled = true;
-        if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
-        res.json({ success: true, message: 'Connection successful' });
-      }
-    })
-    .on('error', (err) => {
-      clearTimeout(timeout);
-      if (!responseHandled) {
-        responseHandled = true;
-        console.error('Connection test error:', err.message);
-        res.status(400).json({ success: false, message: err.message });
-      }
-    })
-    .run();
+  try {
+    const command = ffmpeg(url)
+      .inputOptions([
+        '-rtsp_transport', 'tcp',
+        '-timeout', '10000000', // Connection timeout in microseconds (10 seconds)
+        '-analyzeduration', '2000000',
+        '-probesize', '2000000'
+      ])
+      .outputOptions(['-frames:v', '1', '-q:v', '2'])
+      .output(testFile)
+      .on('start', (commandLine) => {
+        console.log('FFmpeg test command:', commandLine);
+      })
+      .on('end', () => {
+        clearTimeout(timeout);
+        if (!responseHandled) {
+          responseHandled = true;
+          cleanup();
+          console.log('RTSP connection test successful for URL:', url);
+          res.json({ success: true, message: 'Connection successful' });
+        }
+      })
+      .on('error', (err) => {
+        clearTimeout(timeout);
+        if (!responseHandled) {
+          responseHandled = true;
+          cleanup();
+          console.error('RTSP connection test error for URL:', url, '- Error:', err.message);
+          
+          // Provide more helpful error messages
+          let errorMessage = err.message;
+          if (err.message.includes('ETIMEDOUT') || err.message.includes('timeout')) {
+            errorMessage = 'Connection timeout - unable to reach RTSP stream';
+          } else if (err.message.includes('ECONNREFUSED')) {
+            errorMessage = 'Connection refused - check if the RTSP server is running';
+          } else if (err.message.includes('401') || err.message.includes('Unauthorized')) {
+            errorMessage = 'Authentication failed - check username and password in URL';
+          } else if (err.message.includes('404') || err.message.includes('Not Found')) {
+            errorMessage = 'Stream not found - check the RTSP path';
+          } else if (err.message.includes('Invalid data')) {
+            errorMessage = 'Invalid stream format or corrupted data';
+          }
+          
+          res.status(400).json({ success: false, message: errorMessage });
+        }
+      });
+
+    command.run();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (!responseHandled) {
+      responseHandled = true;
+      cleanup();
+      console.error('FFmpeg command error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to start connection test: ' + err.message });
+    }
+  }
 });
 
 app.post('/api/start-capture', (req, res) => {
-  const { url, interval, duration, useTimer } = req.body;
+  const { sourceType, sourceConfig, interval, duration, useTimer } = req.body;
   const sessionId = uuidv4();
   const sessionDir = path.join(snapshotsDir, sessionId);
-  
+
   fs.mkdirSync(sessionDir, { recursive: true });
 
-  // Create session in database
+  // Create session in database with unified configuration
   const sessionData = {
     id: sessionId,
-    source_type: 'rtsp',
-    rtsp_url: url,
+    source_type: sourceType || 'rtsp',
+    source_config: JSON.stringify(sourceConfig || {}),
+    rtsp_url: sourceConfig?.rtspUrl || sourceConfig?.url, // Legacy compatibility
     interval_seconds: parseInt(interval),
     duration_seconds: useTimer ? parseInt(duration) : null,
     use_timer: useTimer
@@ -145,19 +321,20 @@ app.post('/api/start-capture', (req, res) => {
     // Check storage quota before starting
     const quotaCheck = checkQuotaBeforeCapture(sessionId);
     if (!quotaCheck.success) {
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         message: quotaCheck.message,
         quotaExceeded: true
       });
     }
-    
+
     db.createSession(sessionData);
-    
+
     // Start capture process
     const session = {
       id: sessionId,
-      rtspUrl: url,
+      sourceType: sourceType || 'rtsp',
+      sourceConfig: sourceConfig || {},
       interval: parseInt(interval),
       duration: useTimer ? parseInt(duration) : null,
       active: true,
@@ -179,21 +356,14 @@ function captureSnapshot(session) {
   const sessionDir = path.join(snapshotsDir, session.id);
   const snapshotFile = path.join(sessionDir, `snapshot-${Date.now()}.jpg`);
 
-  ffmpeg(session.rtspUrl)
-    .inputOptions([
-      '-rtsp_transport', 'tcp',
-      '-timeout', '5000000',
-      '-analyzeduration', '2000000',
-      '-probesize', '2000000'
-    ])
-    .outputOptions(['-frames:v 1', '-q:v 2'])
-    .output(snapshotFile)
-    .on('end', () => {
-      const relativePath = `/snapshots/${session.id}/${path.basename(snapshotFile)}`;
-      
+  // Use unified capture function
+  captureFromSource(session.id, session.sourceConfig)
+    .then((capturedFile) => {
+      const relativePath = `/snapshots/${session.id}/${path.basename(capturedFile)}`;
+
       // Save snapshot to database
       try {
-        const stats = fs.statSync(snapshotFile);
+        const stats = fs.statSync(capturedFile);
         db.addSnapshot(session.id, relativePath, {
           file_size: stats.size
         });
@@ -203,7 +373,7 @@ function captureSnapshot(session) {
 
       // Get current snapshot count
       const snapshots = db.getSnapshots(session.id);
-      
+
       broadcast({
         type: 'snapshot',
         sessionId: session.id,
@@ -226,15 +396,14 @@ function captureSnapshot(session) {
         setTimeout(() => captureSnapshot(session), session.interval * 1000);
       }
     })
-    .on('error', (err) => {
+    .catch((err) => {
       console.error('Error capturing snapshot:', err);
       broadcast({
         type: 'error',
         sessionId: session.id,
         message: err.message
       });
-    })
-    .run();
+    });
 }
 
 app.post('/api/stop-capture', (req, res) => {
@@ -378,6 +547,159 @@ app.get('/api/storage-stats', (req, res) => {
   res.json({ success: true, stats });
 });
 
+// Device enumeration endpoint
+app.get('/api/list-devices', (req, res) => {
+  try {
+    const devices = {
+      usbCameras: [],
+      captureCards: [],
+      screens: []
+    };
+
+    // Enumerate V4L2 devices (USB cameras and capture cards)
+    try {
+      const v4lDevices = fs.readdirSync('/dev/').filter(file => file.startsWith('video'));
+      for (const device of v4lDevices) {
+        const devicePath = `/dev/${device}`;
+
+        // Try to get device info using v4l2-ctl if available
+        try {
+          const { execSync } = require('child_process');
+          const info = execSync(`v4l2-ctl -d ${devicePath} --info 2>/dev/null || echo "Unknown device"`).toString();
+
+          // Basic classification based on device name and info
+          if (info.includes('usb') || info.includes('USB') || device.includes('0')) {
+            devices.usbCameras.push({
+              path: devicePath,
+              name: info.split('\n')[0] || `USB Camera (${device})`,
+              device: device
+            });
+          } else {
+            devices.captureCards.push({
+              path: devicePath,
+              name: info.split('\n')[0] || `Capture Card (${device})`,
+              device: device
+            });
+          }
+        } catch (error) {
+          // Fallback if v4l2-ctl not available
+          if (device.includes('0')) {
+            devices.usbCameras.push({
+              path: devicePath,
+              name: `Camera (${device})`,
+              device: device
+            });
+          } else {
+            devices.captureCards.push({
+              path: devicePath,
+              name: `Capture Device (${device})`,
+              device: device
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Could not enumerate V4L2 devices:', error.message);
+    }
+
+    // Screen/display enumeration
+    try {
+      if (process.platform === 'linux') {
+        devices.screens.push({
+          display: ':0.0',
+          name: 'Primary Display',
+          resolution: 'auto'
+        });
+      } else if (process.platform === 'win32') {
+        devices.screens.push({
+          display: 'desktop',
+          name: 'Desktop',
+          resolution: 'auto'
+        });
+      }
+    } catch (error) {
+      console.warn('Could not enumerate displays:', error.message);
+    }
+
+    res.json({
+      success: true,
+      devices: devices
+    });
+  } catch (error) {
+    console.error('Error listing devices:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to enumerate devices',
+      error: error.message
+    });
+  }
+});
+
+// Source testing endpoint
+app.post('/api/test-source', async (req, res) => {
+  const { sourceType, sourceConfig } = req.body;
+
+  if (!sourceType || !sourceConfig) {
+    return res.status(400).json({
+      success: false,
+      message: 'Source type and configuration required'
+    });
+  }
+
+  const testFile = path.join(snapshotsDir, `test-${Date.now()}.jpg`);
+  let responseHandled = false;
+
+  // Cleanup function
+  const cleanup = () => {
+    try {
+      if (fs.existsSync(testFile)) {
+        fs.unlinkSync(testFile);
+      }
+    } catch (err) {
+      console.error('Error cleaning up test file:', err.message);
+    }
+  };
+
+  const timeout = setTimeout(() => {
+    if (!responseHandled) {
+      responseHandled = true;
+      cleanup();
+      res.status(400).json({
+        success: false,
+        message: 'Connection timeout - unable to reach source within 15 seconds'
+      });
+    }
+  }, 15000);
+
+  try {
+    await captureFromSource('test-session', sourceConfig);
+
+    clearTimeout(timeout);
+    if (!responseHandled) {
+      responseHandled = true;
+      cleanup();
+      res.json({ success: true, message: 'Connection successful' });
+    }
+  } catch (error) {
+    clearTimeout(timeout);
+    if (!responseHandled) {
+      responseHandled = true;
+      cleanup();
+
+      let errorMessage = error.message;
+      if (error.message.includes('ENOENT') && sourceType.includes('camera')) {
+        errorMessage = 'Device not found - check if camera is connected';
+      } else if (error.message.includes('EACCES')) {
+        errorMessage = 'Permission denied - check device permissions';
+      } else if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
+        errorMessage = 'Connection timeout - unable to reach source';
+      }
+
+      res.status(400).json({ success: false, message: errorMessage });
+    }
+  }
+});
+
 // Photo upload endpoints
 app.post('/api/upload-photos', upload.array('photos', 50), async (req, res) => {
   try {
@@ -402,7 +724,7 @@ app.post('/api/upload-photos', upload.array('photos', 50), async (req, res) => {
     }
 
     const uploadedFiles = [];
-    
+
     for (const file of files) {
       try {
         // Generate thumbnail
@@ -412,15 +734,60 @@ app.post('/api/upload-photos', upload.array('photos', 50), async (req, res) => {
           .jpeg({ quality: 80 })
           .toFile(thumbnailPath);
 
-        // Get image metadata
+        // Get image metadata including EXIF
         const metadata = await sharp(file.path).metadata();
-        
+
+        // Extract capture date from EXIF or file stats
+        let capturedAt = new Date(); // fallback to processing time
+
+        // Try EXIF DateTimeOriginal first
+        if (metadata.exif && metadata.exif.DateTimeOriginal) {
+          try {
+            // EXIF dates are in "YYYY:MM:DD HH:MM:SS" format
+            const exifDateStr = metadata.exif.DateTimeOriginal;
+            const dateParts = exifDateStr.split(' ');
+            if (dateParts.length === 2) {
+              const dateStr = dateParts[0].replace(/:/g, '-');
+              const timeStr = dateParts[1];
+              capturedAt = new Date(`${dateStr}T${timeStr}`);
+            }
+          } catch (error) {
+            console.warn('Failed to parse EXIF DateTimeOriginal:', error.message);
+          }
+        }
+
+        // Fallback to EXIF DateTime
+        if (capturedAt.getTime() === new Date().getTime() && metadata.exif && metadata.exif.DateTime) {
+          try {
+            const exifDateStr = metadata.exif.DateTime;
+            const dateParts = exifDateStr.split(' ');
+            if (dateParts.length === 2) {
+              const dateStr = dateParts[0].replace(/:/g, '-');
+              const timeStr = dateParts[1];
+              capturedAt = new Date(`${dateStr}T${timeStr}`);
+            }
+          } catch (error) {
+            console.warn('Failed to parse EXIF DateTime:', error.message);
+          }
+        }
+
+        // Final fallback to file modification time
+        if (capturedAt.getTime() === new Date().getTime()) {
+          try {
+            const stats = fs.statSync(file.path);
+            capturedAt = stats.mtime;
+          } catch (error) {
+            console.warn('Failed to get file modification time:', error.message);
+          }
+        }
+
         // Save to database
         const relativePath = `/snapshots/${sessionId}/${path.basename(file.path)}`;
         db.addSnapshot(sessionId, relativePath, {
           file_size: file.size,
           width: metadata.width,
-          height: metadata.height
+          height: metadata.height,
+          captured_at: capturedAt.toISOString()
         });
 
         uploadedFiles.push({
@@ -447,13 +814,55 @@ app.post('/api/upload-photos', upload.array('photos', 50), async (req, res) => {
   }
 });
 
+// New API endpoint to list child directories
+app.get('/api/list-child-directories', (req, res) => {
+  try {
+    const { parentPath } = req.query;
+
+    if (!parentPath) {
+      return res.status(400).json({ success: false, message: 'Parent path required' });
+    }
+
+    // Validate parent path exists
+    if (!fs.existsSync(parentPath)) {
+      return res.status(400).json({ success: false, message: 'Parent path does not exist' });
+    }
+
+    // Check if it's a directory
+    if (!fs.statSync(parentPath).isDirectory()) {
+      return res.status(400).json({ success: false, message: 'Parent path is not a directory' });
+    }
+
+    // Get child directories
+    const items = fs.readdirSync(parentPath);
+    const childDirectories = items
+      .filter(item => {
+        const itemPath = path.join(parentPath, item);
+        return fs.statSync(itemPath).isDirectory();
+      })
+      .sort();
+
+    res.json({
+      success: true,
+      parentPath,
+      childDirectories,
+      defaultParentPath: DEFAULT_PARENT_PATH
+    });
+  } catch (error) {
+    console.error('Error listing child directories:', error);
+    res.status(500).json({ success: false, message: 'Failed to list child directories' });
+  }
+});
+
 app.post('/api/import-from-path', async (req, res) => {
   try {
-    const { networkPath, sessionId } = req.body;
-    
-    if (!networkPath) {
-      return res.status(400).json({ success: false, message: 'Network path required' });
+    const { parentPath, childDirectory, sessionId } = req.body;
+
+    if (!parentPath || !childDirectory) {
+      return res.status(400).json({ success: false, message: 'Parent path and child directory required' });
     }
+
+    const networkPath = path.join(parentPath, childDirectory);
 
     // Validate path exists
     if (!fs.existsSync(networkPath)) {
@@ -489,15 +898,15 @@ app.post('/api/import-from-path', async (req, res) => {
     }
 
     const importedFiles = [];
-    
+
     for (const file of files) {
       try {
         const sourcePath = path.join(networkPath, file);
         const destPath = path.join(sessionDir, `import-${Date.now()}-${file}`);
-        
+
         // Copy file
         fs.copyFileSync(sourcePath, destPath);
-        
+
         // Generate thumbnail
         const thumbnailPath = path.join(sessionDir, `thumb-import-${Date.now()}-${file}`);
         await sharp(destPath)
@@ -508,13 +917,17 @@ app.post('/api/import-from-path', async (req, res) => {
         // Get metadata
         const metadata = await sharp(destPath).metadata();
         const stats = fs.statSync(destPath);
-        
+
+        // Determine capture date from file creation date
+        const capturedAt = stats.birthtime || stats.mtime || new Date();
+
         // Save to database
         const relativePath = `/snapshots/${sessionId}/${path.basename(destPath)}`;
         db.addSnapshot(sessionId, relativePath, {
           file_size: stats.size,
           width: metadata.width,
-          height: metadata.height
+          height: metadata.height,
+          captured_at: capturedAt.toISOString()
         });
 
         importedFiles.push({
@@ -530,8 +943,8 @@ app.post('/api/import-from-path', async (req, res) => {
       }
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       sessionId,
       importedFiles,
       totalFiles: importedFiles.length
@@ -542,20 +955,57 @@ app.post('/api/import-from-path', async (req, res) => {
   }
 });
 
-// MQTT endpoints
+// MQTT endpoints with support for all source types
 app.post('/api/start-mqtt-capture', async (req, res) => {
   try {
-    const { brokerUrl, topic, username, password, rtspUrl, sessionId } = req.body;
-    
-    if (!brokerUrl || !topic || !rtspUrl) {
-      return res.status(400).json({ success: false, message: 'Broker URL, topic, and RTSP URL are required' });
+    const {
+      brokerUrl,
+      topic,
+      username,
+      password,
+      sourceType,      // NEW: Type of video source
+      sourceConfig,    // NEW: Source-specific configuration
+      sessionId
+    } = req.body;
+
+    if (!brokerUrl || !topic) {
+      return res.status(400).json({ success: false, message: 'Broker URL and topic are required' });
     }
 
-    // Create session in database
+    // Validate source type (exclude file-based sources)
+    const validMqttSources = [
+      'rtsp',
+      'usb_camera',
+      'capture_card',
+      'http_stream',
+      'rtmp_stream',
+      'screen_capture'
+    ];
+
+    if (!sourceType || !validMqttSources.includes(sourceType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid source type required for MQTT capture. File-based sources not supported.'
+      });
+    }
+
+    if (!sourceConfig) {
+      return res.status(400).json({
+        success: false,
+        message: 'Source configuration required'
+      });
+    }
+
+    // Create session in database with unified configuration
     const sessionData = {
       id: sessionId,
-      source_type: 'mqtt',
-      source_config: JSON.stringify({ brokerUrl, topic, username, rtspUrl }),
+      source_type: sourceType,  // Store actual source type
+      source_config: JSON.stringify({
+        ...sourceConfig,        // Source-specific config
+        mqttBrokerUrl: brokerUrl,
+        mqttTopic: topic,
+        mqttUsername: username
+      }),
       interval_seconds: 1, // Not used for MQTT
       use_timer: false
     };
@@ -600,15 +1050,24 @@ app.post('/api/start-mqtt-capture', async (req, res) => {
       if (receivedTopic === topic) {
         const messageStr = message.toString();
         console.log(`MQTT message received for session ${sessionId}: ${messageStr}`);
-        
+
         // Check for transition from '1' to '0' (or any change that triggers capture)
         if (lastMessage === '1' && messageStr === '0') {
-          console.log(`Triggering photo capture for session ${sessionId}`);
-          await captureMqttSnapshot(sessionId);
+          console.log(`Triggering photo capture for session ${sessionId} from ${sourceType} source`);
+          try {
+            await captureMqttSnapshot(sessionId);
+          } catch (error) {
+            console.error(`Error capturing MQTT snapshot for ${sourceType}:`, error);
+            broadcast({
+              type: 'error',
+              sessionId: sessionId,
+              message: `MQTT capture error: ${error.message}`
+            });
+          }
         }
-        
+
         lastMessage = messageStr;
-        
+
         broadcast({
           type: 'mqtt-message',
           sessionId: sessionId,
@@ -680,7 +1139,7 @@ app.get('/api/mqtt-status/:sessionId', (req, res) => {
   }
 });
 
-// MQTT snapshot capture function
+// MQTT snapshot capture function (now uses unified capture)
 async function captureMqttSnapshot(sessionId) {
   const session = db.getSession(sessionId);
   if (!session) {
@@ -693,64 +1152,42 @@ async function captureMqttSnapshot(sessionId) {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
 
-  const snapshotFile = path.join(sessionDir, `mqtt-${Date.now()}.jpg`);
-
-  // Get RTSP URL from session configuration
+  // Get source configuration from session
   const sourceConfig = session.source_config ? JSON.parse(session.source_config) : {};
-  const rtspUrl = sourceConfig.rtspUrl;
-  
-  if (!rtspUrl) {
-    console.error(`No RTSP URL configured for MQTT session ${sessionId}`);
+
+  try {
+    // Use unified capture function for any source type
+    const snapshotFile = await captureFromSource(sessionId, sourceConfig);
+    const relativePath = `/snapshots/${sessionId}/${path.basename(snapshotFile)}`;
+
+    // Save snapshot to database
+    try {
+      const stats = fs.statSync(snapshotFile);
+      db.addSnapshot(sessionId, relativePath, {
+        file_size: stats.size
+      });
+    } catch (error) {
+      console.error('Error saving MQTT snapshot to database:', error);
+    }
+
+    // Get current snapshot count
+    const snapshots = db.getSnapshots(sessionId);
+
+    broadcast({
+      type: 'snapshot',
+      sessionId: sessionId,
+      snapshot: relativePath,
+      count: snapshots.length,
+      source: 'mqtt'
+    });
+  } catch (error) {
+    console.error('Error capturing MQTT snapshot:', error);
     broadcast({
       type: 'error',
       sessionId: sessionId,
-      message: 'No RTSP URL configured for MQTT capture'
+      message: `MQTT capture error: ${error.message}`
     });
-    return;
   }
-
-  ffmpeg(rtspUrl)
-    .inputOptions([
-      '-rtsp_transport', 'tcp',
-      '-timeout', '5000000',
-      '-analyzeduration', '2000000',
-      '-probesize', '2000000'
-    ])
-    .outputOptions(['-frames:v 1', '-q:v 2'])
-    .output(snapshotFile)
-    .on('end', () => {
-      const relativePath = `/snapshots/${sessionId}/${path.basename(snapshotFile)}`;
-      
-      // Save snapshot to database
-      try {
-        const stats = fs.statSync(snapshotFile);
-        db.addSnapshot(sessionId, relativePath, {
-          file_size: stats.size
-        });
-      } catch (error) {
-        console.error('Error saving MQTT snapshot to database:', error);
-      }
-
-      // Get current snapshot count
-      const snapshots = db.getSnapshots(sessionId);
-      
-      broadcast({
-        type: 'snapshot',
-        sessionId: sessionId,
-        snapshot: relativePath,
-        count: snapshots.length,
-        source: 'mqtt'
-      });
-    })
-    .on('error', (err) => {
-      console.error('Error capturing MQTT snapshot:', err);
-      broadcast({
-        type: 'error',
-        sessionId: sessionId,
-        message: `MQTT capture error: ${err.message}`
-      });
-    })
-    .run();
 }
 
 // Cleanup functions
@@ -961,27 +1398,107 @@ function checkQuotaBeforeCapture(sessionId) {
 app.get('/api/download/video/:sessionId', (req, res) => {
   const { sessionId } = req.params;
   const videoPath = path.join(videosDir, `timelapse-${sessionId}.mp4`);
-  
+
   if (!fs.existsSync(videoPath)) {
     return res.status(404).json({ success: false, message: 'Video not found' });
   }
-  
+
   const filename = `timelapse-${sessionId}.mp4`;
-  
+
   // Set headers to force download
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Content-Type', 'video/mp4');
-  
+
   // Stream the file
   const fileStream = fs.createReadStream(videoPath);
   fileStream.pipe(res);
-  
+
   fileStream.on('error', (err) => {
     console.error('Error streaming video file:', err);
     if (!res.headersSent) {
       res.status(500).json({ success: false, message: 'Error downloading video' });
     }
   });
+});
+
+// Individual photo download endpoint
+app.get('/api/download/photo/:sessionId/:filename', (req, res) => {
+  const { sessionId, filename } = req.params;
+  const photoPath = path.join(snapshotsDir, sessionId, filename);
+
+  if (!fs.existsSync(photoPath)) {
+    return res.status(404).json({ success: false, message: 'Photo not found' });
+  }
+
+  // Set headers to force download
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'image/jpeg');
+
+  // Stream the file
+  const fileStream = fs.createReadStream(photoPath);
+  fileStream.pipe(res);
+
+  fileStream.on('error', (err) => {
+    console.error('Error streaming photo file:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Error downloading photo' });
+    }
+  });
+});
+
+// Session photos zip download endpoint
+app.get('/api/download/photos/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+
+  // Check if session exists
+  const session = db.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({ success: false, message: 'Session not found' });
+  }
+
+  // Get all snapshots for the session
+  const snapshots = db.getSnapshots(sessionId);
+  if (snapshots.length === 0) {
+    return res.status(404).json({ success: false, message: 'No photos found for this session' });
+  }
+
+  const sessionDir = path.join(snapshotsDir, sessionId);
+  const zipFilename = `session-${sessionId}-photos.zip`;
+
+  // Set headers for zip download
+  res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+  res.setHeader('Content-Type', 'application/zip');
+
+  // Create zip archive
+  const archive = archiver('zip', {
+    zlib: { level: 9 } // Maximum compression
+  });
+
+  // Handle archive errors
+  archive.on('error', (err) => {
+    console.error('Archive error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Error creating zip archive' });
+    }
+  });
+
+  // Pipe archive to response
+  archive.pipe(res);
+
+  // Add each photo to the archive
+  snapshots.forEach((snapshot) => {
+    const filePath = path.join(__dirname, snapshot.file_path.replace(/^\//, ''));
+    const fileName = path.basename(snapshot.file_path);
+
+    if (fs.existsSync(filePath)) {
+      archive.file(filePath, { name: fileName });
+    } else {
+      console.warn(`Photo file not found: ${filePath}`);
+    }
+  });
+
+  // Finalize the archive
+  archive.finalize();
 });
 
 app.get('/health', (req, res) => {

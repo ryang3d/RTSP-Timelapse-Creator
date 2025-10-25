@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+.env
+*.md
+.DS_Store
+snapshots
+videos
+db.sqlite
+db.sqlite-journal
