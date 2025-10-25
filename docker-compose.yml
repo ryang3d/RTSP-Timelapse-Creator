@@ -4,8 +4,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "3017:3001"
-      - "3018:3002"
+      - "3001:3001"
+      - "3002:3002"
     # NEW: Device access for USB cameras and capture cards
     devices:
       - /dev/video0:/dev/video0
@@ -33,10 +33,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=http://ryan-server:3017
-        - REACT_APP_WS_URL=ws://ryan-server:3018
+        - REACT_APP_API_URL=http://localhost:3001
+        - REACT_APP_WS_URL=ws://localhost:3002
     ports:
-      - "3011:80"
+      - "3000:80"
     depends_on:
       - backend
     restart: unless-stopped
