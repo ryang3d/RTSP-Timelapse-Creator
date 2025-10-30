@@ -30,7 +30,8 @@ services:
     privileged: true
     restart: unless-stopped
     networks:
-      - frigate-default
+      - rtsp-network
+      - frigate_default
     deploy:
       resources:
         reservations:
@@ -61,5 +62,5 @@ volumes:
 networks:
   rtsp-network:
     driver: bridge
-  frigate-default:
+  frigate_default:
     external: true

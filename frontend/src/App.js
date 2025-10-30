@@ -40,6 +40,7 @@ function App() {
   
   // MQTT states
   const [mqttBrokerUrl, setMqttBrokerUrl] = useState('');
+  const [mqttPort, setMqttPort] = useState(1883);
   const [mqttTopic, setMqttTopic] = useState('');
   const [mqttUsername, setMqttUsername] = useState('');
   const [mqttPassword, setMqttPassword] = useState('');
@@ -75,7 +76,6 @@ function App() {
   const [loadingDevices, setLoadingDevices] = useState(false);
 
   // MQTT source selection
-  const [mqttSourceType, setMqttSourceType] = useState('rtsp');
   const [mqttHttpUrl, setMqttHttpUrl] = useState('');
   const [mqttRtmpUrl, setMqttRtmpUrl] = useState('');
   const [mqttUsbDevice, setMqttUsbDevice] = useState('/dev/video0');
@@ -447,6 +447,12 @@ function App() {
       return;
     }
 
+    // Ensure broker URL has protocol prefix
+    let brokerUrl = mqttBrokerUrl.trim();
+    if (!brokerUrl.startsWith('mqtt://') && !brokerUrl.startsWith('mqtts://') && !brokerUrl.startsWith('ws://') && !brokerUrl.startsWith('wss://')) {
+      brokerUrl = 'mqtt://' + brokerUrl;
+    }
+
     // Build source configuration based on selected source
     const sourceConfig = {};
     let sourceType = selectedSource;
@@ -498,7 +504,8 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          brokerUrl: mqttBrokerUrl,
+          brokerUrl: brokerUrl,
+          port: mqttPort,
           topic: mqttTopic,
           username: mqttUsername || undefined,
           password: mqttPassword || undefined,
@@ -646,6 +653,31 @@ function App() {
     }
   };
 
+  const stopSession = async (sessionId) => {
+    if (!window.confirm('Are you sure you want to stop this session? This will end the active capture.')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/stop-capture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        await loadSessions();
+        await loadStorageStats();
+        alert('Session stopped successfully');
+      } else {
+        alert('Failed to stop session: ' + data.message);
+      }
+    } catch (error) {
+      alert('Error stopping session: ' + error.message);
+    }
+  };
+
   const deleteSession = async (sessionId) => {
     if (!window.confirm('Are you sure you want to delete this session? This will permanently delete all snapshots and videos.')) {
       return;
@@ -732,20 +764,20 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-8">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-4xl font-bold text-white mb-8 text-center">
-          RTSP Timelapse Creator
+        <h1 className="text-4xl font-bold text-slate-100 mb-8 text-center">
+          📹 Timelapse Creator
         </h1>
 
         {/* New Navigation */}
         <div className="flex justify-center mb-8 relative z-50">
-          <div className="bg-white/10 backdrop-blur-lg rounded-lg p-1 border border-white/20 flex gap-2">
+          <div className="bg-slate-800/50 backdrop-blur-lg rounded-lg p-1 border border-slate-700 flex gap-2">
             {/* Input Sources Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
-                className="px-4 py-2 rounded-md transition-colors whitespace-nowrap bg-purple-600 text-white flex items-center gap-2"
+                className="px-4 py-2 rounded-md transition-colors whitespace-nowrap bg-slate-600 text-slate-100 flex items-center gap-2"
               >
                 {selectedSource === 'rtsp' && <><Settings className="w-4 h-4" /> RTSP Stream</>}
                 {selectedSource === 'video_devices' && <><Camera className="w-4 h-4" /> Video Devices</>}
@@ -758,52 +790,52 @@ function App() {
               </button>
 
               {sourceDropdownOpen && (
-                <div className="absolute top-full left-0 mt-1 bg-purple-600 rounded-lg border border-white/20 min-w-full z-50">
+                <div className="absolute top-full left-0 mt-1 bg-slate-700 rounded-lg border border-slate-600 min-w-full z-50">
                   <button
                     onClick={() => { setSelectedSource('rtsp'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2 first:rounded-t-lg"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2 first:rounded-t-lg"
                   >
                     <Settings className="w-4 h-4" />
                     RTSP Stream
                   </button>
                   <button
                     onClick={() => { setSelectedSource('video_devices'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2"
                   >
                     <Camera className="w-4 h-4" />
                     Video Devices
                   </button>
                   <button
                     onClick={() => { setSelectedSource('http'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2"
                   >
                     <Globe className="w-4 h-4" />
                     HTTP Stream
                   </button>
                   <button
                     onClick={() => { setSelectedSource('rtmp'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2"
                   >
                     <Radio className="w-4 h-4" />
                     RTMP Stream
                   </button>
                   <button
                     onClick={() => { setSelectedSource('screen'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2"
                   >
                     <Monitor className="w-4 h-4" />
                     Screen Capture
                   </button>
                   <button
                     onClick={() => { setSelectedSource('upload'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2"
                   >
                     <Upload className="w-4 h-4" />
                     Upload Photos
                   </button>
                   <button
                     onClick={() => { setSelectedSource('import'); setSourceDropdownOpen(false); }}
-                    className="w-full px-4 py-2 text-left hover:bg-white/10 text-white flex items-center gap-2 last:rounded-b-lg"
+                    className="w-full px-4 py-2 text-left hover:bg-slate-600 text-slate-100 flex items-center gap-2 last:rounded-b-lg"
                   >
                     <FolderOpen className="w-4 h-4" />
                     Import from Path
@@ -814,13 +846,13 @@ function App() {
 
             {/* Trigger Type Selector - Only show for live sources */}
             {(selectedSource === 'rtsp' || selectedSource === 'video_devices' || selectedSource === 'http' || selectedSource === 'rtmp' || selectedSource === 'screen') && (
-              <div className="flex bg-white/5 rounded-md p-1">
+              <div className="flex bg-slate-700/50 rounded-md p-1">
                 <button
                   onClick={() => setSelectedTrigger('timed')}
                   className={`px-3 py-1 rounded transition-colors flex items-center gap-1 ${
                     selectedTrigger === 'timed'
-                      ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:text-white'
+                      ? 'bg-slate-600 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-100'
                   }`}
                 >
                   <Clock className="w-3 h-3" />
@@ -830,8 +862,8 @@ function App() {
                   onClick={() => setSelectedTrigger('mqtt')}
                   className={`px-3 py-1 rounded transition-colors flex items-center gap-1 ${
                     selectedTrigger === 'mqtt'
-                      ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:text-white'
+                      ? 'bg-slate-600 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-100'
                   }`}
                 >
                   <Zap className="w-3 h-3" />
@@ -845,8 +877,8 @@ function App() {
               onClick={() => setShowSessions(!showSessions)}
               className={`px-4 py-2 rounded-md transition-colors whitespace-nowrap ${
                 showSessions
-                  ? 'bg-purple-600 text-white'
-                  : 'text-gray-300 hover:text-white'
+                  ? 'bg-slate-600 text-slate-100'
+                  : 'text-slate-400 hover:text-slate-100'
               }`}
             >
               <Database className="w-4 h-4 inline mr-2" />
@@ -858,21 +890,21 @@ function App() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Live Source Content - Combined with trigger type */}
           {!showSessions && (selectedSource === 'video_devices' || (activeTab === 'video_devices' && selectedTrigger === 'timed')) && selectedTrigger === 'timed' && (
-            <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
-              <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+            <div className="bg-slate-800/50 backdrop-blur-lg rounded-xl p-6 border border-slate-700">
+              <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center gap-2">
                 <Camera className="w-5 h-5" />
                 Video Device Configuration
               </h2>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-white mb-2">
+                  <label className="block text-sm font-medium text-slate-100 mb-2">
                     Video Device
                   </label>
                   <select
                     value={usbDevicePath}
                     onChange={(e) => setUsbDevicePath(e.target.value)}
-                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
                   >
                     {loadingDevices ? (
                       <option>Loading devices...</option>
@@ -896,20 +928,20 @@ function App() {
                       </>
                     )}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">
+                  <p className="text-xs text-slate-400 mt-1">
                     Select any available video device (USB cameras, webcams, capture cards, etc.)
                   </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-white mb-2">
+                    <label className="block text-sm font-medium text-slate-100 mb-2">
                       Resolution
                     </label>
                     <select
                       value={usbResolution}
                       onChange={(e) => setUsbResolution(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
                     >
                       <option value="640x480">640x480 (VGA)</option>
                       <option value="720x480">720x480 (NTSC)</option>
@@ -920,13 +952,13 @@ function App() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-white mb-2">
+                    <label className="block text-sm font-medium text-slate-100 mb-2">
                       Format
                     </label>
                     <select
                       value={usbFormat}
                       onChange={(e) => setUsbFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
                     >
                       <option value="mjpeg">MJPEG</option>
                       <option value="yuyv">YUYV</option>
@@ -936,7 +968,7 @@ function App() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-white mb-2">
+                  <label className="block text-sm font-medium text-slate-100 mb-2">
                     FPS
                   </label>
                   <input
@@ -945,7 +977,7 @@ function App() {
                     onChange={(e) => setUsbFps(Math.max(1, parseInt(e.target.value) || 30))}
                     min="1"
                     max="60"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
                   />
                 </div>
 
@@ -1102,7 +1134,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="text-center text-white">
+                <div className="text-center text-slate-100">
                   <p className="text-sm">Snapshots captured: {snapshots.length}</p>
                 </div>
 
@@ -1172,22 +1204,22 @@ function App() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <label className="block text-sm font-medium text-slate-100 mb-2">Timelapse FPS</label>
                     <input
                       type="number"
                       value={fps}
                       onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
                       min="1"
                       max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <label className="block text-sm font-medium text-slate-100 mb-2">Output Format</label>
                     <select
                       value={outputFormat}
                       onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
                     >
                       <option value="mp4">MP4 Video</option>
                       <option value="gif">GIF Animation</option>
@@ -1721,17 +1753,33 @@ function App() {
               </h2>
 
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    MQTT Broker URL
-                  </label>
-                  <input
-                    type="text"
-                    value={mqttBrokerUrl}
-                    onChange={(e) => setMqttBrokerUrl(e.target.value)}
-                    placeholder="mqtt://broker.example.com:1883"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-100 mb-2">
+                      MQTT Broker URL
+                    </label>
+                    <input
+                      type="text"
+                      value={mqttBrokerUrl}
+                      onChange={(e) => setMqttBrokerUrl(e.target.value)}
+                      placeholder="broker.example.com"
+                      className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-100 mb-2">
+                      Port
+                    </label>
+                    <input
+                      type="number"
+                      value={mqttPort}
+                      onChange={(e) => setMqttPort(Math.max(1, Math.min(65535, parseInt(e.target.value) || 1883)))}
+                      min="1"
+                      max="65535"
+                      placeholder="1883"
+                      className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                    />
+                  </div>
                 </div>
 
                 <div>
@@ -1747,23 +1795,6 @@ function App() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">
-                    Video Source Type
-                  </label>
-                  <select
-                    value={mqttSourceType}
-                    onChange={(e) => setMqttSourceType(e.target.value)}
-                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  >
-                    <option value="rtsp">RTSP Stream</option>
-                    <option value="usb_camera">USB Camera</option>
-                    <option value="capture_card">Capture Card</option>
-                    <option value="http_stream">HTTP Stream</option>
-                    <option value="rtmp_stream">RTMP Stream</option>
-                    <option value="screen_capture">Screen Capture</option>
-                  </select>
-                </div>
 
                 {/* Dynamic source configuration based on selected type */}
                 {selectedSource === 'rtsp' && (
@@ -2122,6 +2153,15 @@ function App() {
                               </div>
                             </div>
                             <div className="ml-4 flex gap-2">
+                              {session.active && (
+                                <button
+                                  onClick={() => stopSession(session.id)}
+                                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                                >
+                                  <Square className="w-3 h-3" />
+                                  Stop
+                                </button>
+                              )}
                               <button
                                 onClick={() => resumeSession(session)}
                                 className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
@@ -2242,14 +2282,14 @@ function App() {
       </div>
 
       {/* Footer */}
-      <footer className="mt-8 text-center text-gray-400 text-sm">
+      <footer className="mt-8 text-center text-slate-400 text-sm">
         <p>
           Dreamt up by{' '}
           <a
             href="https://rg3d.me"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-purple-400 hover:text-purple-300 transition-colors"
+            className="text-slate-300 hover:text-slate-200 transition-colors"
           >
             rg3d.me
           </a>

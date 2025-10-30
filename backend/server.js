@@ -1238,6 +1238,7 @@ app.post('/api/start-mqtt-capture', async (req, res) => {
   try {
     const {
       brokerUrl,
+      port,
       topic,
       username,
       password,
@@ -1290,14 +1291,21 @@ app.post('/api/start-mqtt-capture', async (req, res) => {
 
     db.createSession(sessionData);
 
-    // Create MQTT client
-    const client = mqtt.connect(brokerUrl, {
+    // Create MQTT client with port option
+    const mqttOptions = {
       username: username || undefined,
       password: password || undefined,
       keepalive: 60,
       reconnectPeriod: 1000,
       connectTimeout: 30 * 1000
-    });
+    };
+
+    // Add port to options if specified
+    if (port) {
+      mqttOptions.port = parseInt(port);
+    }
+
+    const client = mqtt.connect(brokerUrl, mqttOptions);
 
     let lastMessage = null;
     let isConnected = false;
