@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir /mnt/photo_import
 
 WORKDIR /app
 

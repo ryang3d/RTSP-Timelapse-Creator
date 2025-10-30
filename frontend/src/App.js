@@ -13,8 +13,10 @@ function App() {
   const [duration, setDuration] = useState(60);
   const [useTimer, setUseTimer] = useState(false);
   const [fps, setFps] = useState(30);
+  const [outputFormat, setOutputFormat] = useState('mp4');
   const [processing, setProcessing] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
+  const [generatedFormat, setGeneratedFormat] = useState('mp4');
   const [sessionId, setSessionId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -113,6 +115,7 @@ function App() {
         case 'timelapse-ready':
           if (data.sessionId === sessionId) {
             setVideoUrl(`${API_URL}${data.videoUrl}`);
+            setGeneratedFormat(data.format || 'mp4');
             setProcessing(false);
           }
           break;
@@ -259,11 +262,11 @@ function App() {
       const response = await fetch(`${API_URL}/api/generate-timelapse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, fps })
+        body: JSON.stringify({ sessionId, fps, format: outputFormat })
       });
 
       const data = await response.json();
-      
+
       if (!data.success) {
         alert('Failed to generate timelapse');
         setProcessing(false);
@@ -312,27 +315,23 @@ function App() {
   };
 
   const loadChildDirectories = async (parentPath) => {
-    if (!parentPath.trim()) {
-      setChildDirectories([]);
-      setSelectedChildDirectory('');
-      return;
-    }
-
     setLoadingDirectories(true);
     try {
-      const response = await fetch(`${API_URL}/api/list-child-directories?parentPath=${encodeURIComponent(parentPath)}`);
+      const response = await fetch(`${API_URL}/api/list-child-directories?parentPath=${encodeURIComponent(parentPath || '')}`);
       const data = await response.json();
 
       if (data.success) {
-        setChildDirectories(data.childDirectories);
-        // Auto-populate parent path from env var if available and not already set
-        if (data.defaultParentPath && !networkPath) {
+        // If we get a defaultParentPath and current path is empty, use it
+        if (data.defaultParentPath && !parentPath) {
           setNetworkPath(data.defaultParentPath);
-          // Reload directories for the default path
-          if (data.defaultParentPath !== parentPath) {
-            loadChildDirectories(data.defaultParentPath);
+          setChildDirectories(data.childDirectories || []);
+        } else {
+          setChildDirectories(data.childDirectories || []);
+          if (data.parentPath) {
+            setNetworkPath(data.parentPath);
           }
         }
+        setSelectedChildDirectory('');
       } else {
         alert('Failed to load child directories: ' + data.message);
         setChildDirectories([]);
@@ -703,10 +702,10 @@ function App() {
 
   // Load default parent directory when import tab is selected
   useEffect(() => {
-    if (activeTab === 'import' && !networkPath) {
+    if (selectedSource === 'import') {
       loadChildDirectories('');
     }
-  }, [activeTab, networkPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSource]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load available devices when relevant tabs are selected
   useEffect(() => {
@@ -873,7 +872,7 @@ function App() {
                   <select
                     value={usbDevicePath}
                     onChange={(e) => setUsbDevicePath(e.target.value)}
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                   >
                     {loadingDevices ? (
                       <option>Loading devices...</option>
@@ -910,7 +909,7 @@ function App() {
                     <select
                       value={usbResolution}
                       onChange={(e) => setUsbResolution(e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                     >
                       <option value="640x480">640x480 (VGA)</option>
                       <option value="720x480">720x480 (NTSC)</option>
@@ -927,7 +926,7 @@ function App() {
                     <select
                       value={usbFormat}
                       onChange={(e) => setUsbFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                     >
                       <option value="mjpeg">MJPEG</option>
                       <option value="yuyv">YUYV</option>
@@ -968,6 +967,31 @@ function App() {
                       Stop Capture
                     </button>
                   )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="text-center text-white">
@@ -1024,7 +1048,7 @@ function App() {
                   <select
                     value={httpStreamFormat}
                     onChange={(e) => setHttpStreamFormat(e.target.value)}
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                   >
                     <option value="mjpeg">MJPEG</option>
                     <option value="hls">HLS (m3u8)</option>
@@ -1051,6 +1075,31 @@ function App() {
                       Stop Capture
                     </button>
                   )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="text-center text-white">
@@ -1121,6 +1170,31 @@ function App() {
                   )}
                 </div>
 
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div className="text-center text-white">
                   <p className="text-sm">Snapshots captured: {snapshots.length}</p>
                 </div>
@@ -1162,7 +1236,7 @@ function App() {
                   <select
                     value={screenDisplay}
                     onChange={(e) => setScreenDisplay(e.target.value)}
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                   >
                     {availableDevices?.screens?.length > 0 ? (
                       availableDevices.screens.map((screen) => (
@@ -1210,6 +1284,31 @@ function App() {
                       Stop Capture
                     </button>
                   )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="text-center text-white">
@@ -1310,16 +1409,29 @@ function App() {
                 </div>
               )}
 
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                <input
-                  type="number"
-                  value={fps}
-                  onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                  min="1"
-                  max="60"
-                  className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                  <input
+                    type="number"
+                    value={fps}
+                    onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                    min="1"
+                    max="60"
+                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
               </div>
 
               <div className="flex gap-2">
@@ -1424,6 +1536,31 @@ function App() {
                   </div>
                 )}
 
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div className="text-center text-white">
                   <p className="text-sm">Total photos: {snapshots.length}</p>
                 </div>
@@ -1485,7 +1622,7 @@ function App() {
                     value={selectedChildDirectory}
                     onChange={(e) => setSelectedChildDirectory(e.target.value)}
                     disabled={loadingDirectories || childDirectories.length === 0}
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
                   >
                     <option value="">
                       {loadingDirectories ? 'Loading directories...' : 'Select a child directory'}
@@ -1524,6 +1661,31 @@ function App() {
                     </div>
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
+                </div>
 
                 <div className="text-center text-white">
                   <p className="text-sm">Total photos: {snapshots.length}</p>
@@ -1592,7 +1754,7 @@ function App() {
                   <select
                     value={mqttSourceType}
                     onChange={(e) => setMqttSourceType(e.target.value)}
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                   >
                     <option value="rtsp">RTSP Stream</option>
                     <option value="usb_camera">USB Camera</option>
@@ -1637,7 +1799,7 @@ function App() {
                     <select
                       value={mqttUsbDevice}
                       onChange={(e) => setMqttUsbDevice(e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                     >
                       {availableDevices?.usbCameras?.length > 0 || availableDevices?.captureCards?.length > 0 ? (
                         <>
@@ -1700,7 +1862,7 @@ function App() {
                     <select
                       value={mqttScreenDisplay}
                       onChange={(e) => setMqttScreenDisplay(e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                     >
                       {availableDevices?.screens?.length > 0 ? (
                         availableDevices.screens.map((screen) => (
@@ -1803,6 +1965,31 @@ function App() {
                     )}
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                    <input
+                      type="number"
+                      value={fps}
+                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                      min="1"
+                      max="60"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                    <select
+                      value={outputFormat}
+                      onChange={(e) => setOutputFormat(e.target.value)}
+                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="mp4">MP4 Video</option>
+                      <option value="gif">GIF Animation</option>
+                    </select>
+                  </div>
+                </div>
 
                 <div className="text-center text-white">
                   <p className="text-sm">Snapshots captured: {snapshots.length}</p>

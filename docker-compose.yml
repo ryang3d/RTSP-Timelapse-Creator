@@ -15,6 +15,7 @@ services:
     volumes:
       - snapshots_data:/app/snapshots
       - videos_data:/app/videos
+      - /mnt/timelapse1:/mnt/photo_import
       # NEW: X11 for screen capture
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     environment:
@@ -22,19 +23,29 @@ services:
       - PORT=3001
       - WS_PORT=3002
       - DISPLAY=:0  # For screen capture
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+      - IMPORT_PARENT_PATH=/mnt/photo_import
     # NEW: Privileged mode for device access
     privileged: true
     restart: unless-stopped
     networks:
-      - rtsp-network
+      - frigate-default
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=http://localhost:3001
-        - REACT_APP_WS_URL=ws://localhost:3002
+        - REACT_APP_API_URL=http://solideon-frigate1.local:3001
+        - REACT_APP_WS_URL=ws://solideon-frigate1.local:3002
     ports:
       - "3000:80"
     depends_on:
@@ -50,3 +61,5 @@ volumes:
 networks:
   rtsp-network:
     driver: bridge
+  frigate-default:
+    external: true

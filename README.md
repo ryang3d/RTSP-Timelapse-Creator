@@ -25,9 +25,10 @@ Transform camera streams, uploaded photos, and MQTT-triggered captures into time
 
 ### 🎬 **Timelapse Creation**
 - **Flexible Scheduling** - Set custom intervals and optional auto-stop duration
-- **Customizable Output** - Adjust timelapse FPS (1-60)
+- **Customizable Output** - Adjust timelapse FPS (1-60) and choose between MP4 or GIF format
+- **Multiple Output Formats** - Generate timelapses as MP4 video or GIF animation
 - **Real-time Preview** - View snapshots as they're captured via WebSocket
-- **Video Export** - Download generated timelapses as MP4 files
+- **Video Export** - Download generated timelapses in your chosen format
 - **Thumbnail Generation** - Automatic thumbnail creation for photo galleries
 
 ## Quick Start
@@ -120,10 +121,14 @@ The application provides multiple ways to create timelapses:
 7. **Perfect for motion sensors, door triggers, etc.**
 
 ### 🎬 **Timelapse Generation**
-1. **Generate timelapse** once you have at least 2 snapshots
-2. **Download your video** as MP4
-3. **Re-download from Sessions tab** - All generated videos are preserved
-4. **Manage sessions** in the Sessions tab
+1. **Choose your output format**:
+   - **MP4**: Best for long timelapses, smaller file size, better quality, hardware accelerated (H.264 + NVENC)
+   - **GIF**: Best for short loops, web sharing, social media, universal compatibility, no player needed
+2. **Adjust FPS** to control playback speed (1-60 fps)
+3. **Generate timelapse** once you have at least 2 snapshots
+4. **Download your file** in the selected format (MP4 or GIF)
+5. **Re-download from Sessions tab** - All generated files are preserved
+6. **Manage sessions** in the Sessions tab
 
 ## Example Settings
 
@@ -243,9 +248,10 @@ docker-compose up -d --build
 
 ### 📡 **Core Capture**
 - `POST /api/test-connection` - Test RTSP stream connectivity
-- `POST /api/start-capture` - Start RTSP capture session
+- `POST /api/start-capture` - Start capture session (any source type)
 - `POST /api/stop-capture` - Stop active capture session
-- `POST /api/generate-timelapse` - Generate video from snapshots
+- `POST /api/generate-timelapse` - Generate timelapse (MP4 or GIF) from snapshots
+  - Parameters: `sessionId`, `fps`, `format` (mp4 or gif)
 
 ### 📸 **Photo Management**
 - `POST /api/upload-photos` - Upload multiple photos with drag-and-drop
@@ -268,8 +274,10 @@ docker-compose up -d --build
 - `GET /api/storage/quotas` - Get storage quota settings
 - `POST /api/storage/quotas` - Set storage quotas
 
-### 📥 **Video Downloads**
-- `GET /api/download/video/:sessionId` - Download timelapse video (forced download)
+### 📥 **Downloads**
+- `GET /api/download/video/:sessionId` - Download timelapse (MP4 or GIF, auto-detects format)
+- `GET /api/download/photo/:sessionId/:filename` - Download individual snapshot
+- `GET /api/download/photos/:sessionId` - Download all snapshots as ZIP archive
 
 ## Environment Variables
 
@@ -297,8 +305,10 @@ DEFAULT_RETENTION_DAYS=7
 - [x] **Session Persistence** - All data survives restarts
 - [x] **Universal Video Input** - USB cameras, capture cards, HTTP/RTMP streams, screen capture
 - [x] **Multi-Source MQTT** - MQTT triggers work with all video source types
+- [x] **Multiple Output Formats** - MP4 and GIF support for maximum compatibility
 
 ### 🚀 **Future Enhancements**
+- [ ] **Additional Video Formats** - WebM, AVI support
 - [ ] **Multi-Camera Support** - Simultaneous capture from multiple sources
 - [ ] **Scheduled Captures** - Cron-like scheduling for automated timelapses
 - [ ] **Cloud Storage** - S3, Google Cloud Storage integration

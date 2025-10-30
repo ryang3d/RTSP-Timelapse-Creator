@@ -81,6 +81,7 @@ class DatabaseManager {
         file_path TEXT NOT NULL,
         file_size INTEGER,
         fps INTEGER NOT NULL,
+        format TEXT NOT NULL DEFAULT 'mp4',
         duration_seconds REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -222,17 +223,18 @@ class DatabaseManager {
   }
 
   // Video management
-  addVideo(sessionId, filePath, fps, metadata = {}) {
+  addVideo(sessionId, filePath, fps, format = 'mp4', metadata = {}) {
     const stmt = this.db.prepare(`
-      INSERT INTO videos (session_id, file_path, file_size, fps, duration_seconds)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO videos (session_id, file_path, file_size, fps, format, duration_seconds)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
-    
+
     return stmt.run(
       sessionId,
       filePath,
       metadata.file_size || null,
       fps,
+      format,
       metadata.duration_seconds || null
     );
   }

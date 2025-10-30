@@ -51,7 +51,10 @@ async function captureFromSource(sessionId, sourceConfig) {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
 
-  const snapshotFile = path.join(sessionDir, `snapshot-${Date.now()}.jpg`);
+  // Generate collision-resistant filename
+  const timestamp = Date.now();
+  const randomSuffix = Math.random().toString(36).substr(2, 9);
+  const snapshotFile = path.join(sessionDir, `snapshot-${timestamp}-${randomSuffix}.jpg`);
 
   // Build FFmpeg command based on source type
   let command;
@@ -79,22 +82,219 @@ async function captureFromSource(sessionId, sourceConfig) {
 
   return new Promise((resolve, reject) => {
     command
-      .on('end', () => resolve(snapshotFile))
-      .on('error', (err) => reject(err))
+      .on('start', (commandLine) => {
+        console.log(`=== FFmpeg Command Debug for session ${sessionId} ===`);
+        console.log(`Source type: ${session.source_type}`);
+        console.log(`Output file: ${snapshotFile}`);
+        console.log(`Full command: ${commandLine}`);
+        console.log(`=== End Debug ===`);
+      })
+      .on('stderr', (stderrLine) => {
+        console.log(`FFmpeg stderr for session ${sessionId}:`, stderrLine);
+      })
+      .on('progress', (progress) => {
+        console.log(`FFmpeg progress for session ${sessionId}:`, JSON.stringify(progress));
+      })
+      .on('end', () => {
+        // Verify file was created and has content
+        try {
+          if (fs.existsSync(snapshotFile)) {
+            const stats = fs.statSync(snapshotFile);
+            if (stats.size > 0) {
+              console.log(`Successfully captured snapshot for session ${sessionId}: ${path.basename(snapshotFile)} (${stats.size} bytes)`);
+              resolve(snapshotFile);
+            } else {
+              // Clean up empty file
+              fs.unlinkSync(snapshotFile);
+              reject(new Error('Snapshot file was created but is empty'));
+            }
+          } else {
+            reject(new Error('Snapshot file was not created'));
+          }
+        } catch (verifyError) {
+          reject(new Error(`Failed to verify snapshot file: ${verifyError.message}`));
+        }
+      })
+      .on('error', (err) => {
+        console.error(`FFmpeg error for session ${sessionId}:`, err.message);
+        
+        // Clean up failed file if it exists
+        try {
+          if (fs.existsSync(snapshotFile)) {
+            fs.unlinkSync(snapshotFile);
+            console.log(`Cleaned up failed snapshot file: ${snapshotFile}`);
+          }
+        } catch (cleanupErr) {
+          console.error('Failed to cleanup failed snapshot:', cleanupErr.message);
+        }
+        
+        reject(err);
+      })
       .run();
   });
+}
+
+// Alternative capture method using raw FFmpeg command execution
+async function captureFromSourceRaw(sessionId, sourceConfig) {
+  const session = db.getSession(sessionId);
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+
+  const config = typeof sourceConfig === 'string' ?
+    JSON.parse(sourceConfig) : sourceConfig;
+
+  const sessionDir = path.join(snapshotsDir, sessionId);
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+
+  // Generate collision-resistant filename
+  const timestamp = Date.now();
+  const randomSuffix = Math.random().toString(36).substr(2, 9);
+  const snapshotFile = path.join(sessionDir, `snapshot-${timestamp}-${randomSuffix}.jpg`);
+
+  return new Promise((resolve, reject) => {
+    const { exec } = require('child_process');
+    let ffmpegCmd;
+
+    switch (session.source_type) {
+      case 'rtsp':
+        const rtspUrl = config.rtspUrl || config.url;
+        ffmpegCmd = `ffmpeg -hwaccel cuda -rtsp_transport tcp -timeout 5000000 -i "${rtspUrl}" -vframes 1 -q:v 2 -y "${snapshotFile}"`;
+        break;
+      case 'usb_camera':
+      case 'capture_card':
+        const { devicePath, format, resolution, fps } = config;
+        let inputOptions = `-hwaccel cuda -f v4l2`;
+        if (format) inputOptions += ` -input_format ${format}`;
+        if (resolution) inputOptions += ` -video_size ${resolution}`;
+        if (fps) inputOptions += ` -framerate ${fps}`;
+        else inputOptions += ` -framerate 30`;
+        ffmpegCmd = `ffmpeg ${inputOptions} -i "${devicePath}" -vframes 1 -q:v 2 -y "${snapshotFile}"`;
+        break;
+      case 'http_stream':
+        const { httpUrl, streamFormat } = config;
+        let httpOptions = `-hwaccel cuda ${streamFormat === 'hls' ? '-live_start_index -1 -timeout 10000000' : '-timeout 10000000'}`;
+        ffmpegCmd = `ffmpeg ${httpOptions} -i "${httpUrl}" -vframes 1 -q:v 2 -y "${snapshotFile}"`;
+        break;
+      case 'rtmp_stream':
+        const rtmpUrl = config.rtmpUrl || config.url;
+        ffmpegCmd = `ffmpeg -hwaccel cuda -timeout 10000000 -i "${rtmpUrl}" -vframes 1 -q:v 2 -y "${snapshotFile}"`;
+        break;
+      case 'screen_capture':
+        const { display, region } = config;
+        if (process.platform === 'linux') {
+          let grabOptions = `-hwaccel cuda -f x11grab`;
+          if (region) grabOptions += ` -video_size ${region}`;
+          ffmpegCmd = `ffmpeg ${grabOptions} -i "${display || ':0.0'}" -vframes 1 -q:v 2 -y "${snapshotFile}"`;
+        } else {
+          return reject(new Error(`Screen capture not supported on platform: ${process.platform}`));
+        }
+        break;
+      default:
+        return reject(new Error(`Unsupported source type: ${session.source_type}`));
+    }
+
+    console.log(`=== Raw FFmpeg Command for session ${sessionId} ===`);
+    console.log(`Source type: ${session.source_type}`);
+    console.log(`Command: ${ffmpegCmd}`);
+    console.log(`=== End Raw Command ===`);
+
+    exec(ffmpegCmd, { timeout: 30000 }, (error, stdout, stderr) => {
+      console.log(`FFmpeg stdout for session ${sessionId}:`, stdout);
+      console.log(`FFmpeg stderr for session ${sessionId}:`, stderr);
+
+      if (error) {
+        console.error(`FFmpeg raw command error for session ${sessionId}:`, error.message);
+        
+        // Clean up failed file if it exists
+        try {
+          if (fs.existsSync(snapshotFile)) {
+            fs.unlinkSync(snapshotFile);
+          }
+        } catch (cleanupErr) {
+          console.error('Failed to cleanup failed snapshot:', cleanupErr.message);
+        }
+        
+        reject(error);
+        return;
+      }
+
+      // Verify file was created and has content
+      try {
+        if (fs.existsSync(snapshotFile)) {
+          const stats = fs.statSync(snapshotFile);
+          if (stats.size > 0) {
+            console.log(`Successfully captured raw snapshot for session ${sessionId}: ${path.basename(snapshotFile)} (${stats.size} bytes)`);
+            resolve(snapshotFile);
+          } else {
+            // Clean up empty file
+            fs.unlinkSync(snapshotFile);
+            reject(new Error('Snapshot file was created but is empty'));
+          }
+        } else {
+          reject(new Error('Snapshot file was not created'));
+        }
+      } catch (verifyError) {
+        reject(new Error(`Failed to verify snapshot file: ${verifyError.message}`));
+      }
+    });
+  });
+}
+
+// Capture with retry logic wrapper and fallback mechanism
+async function captureWithRetry(sessionId, sourceConfig, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`Capture attempt ${attempt}/${maxRetries} for session ${sessionId} using fluent-ffmpeg`);
+      return await captureFromSource(sessionId, sourceConfig);
+    } catch (error) {
+      console.error(`Fluent-ffmpeg capture attempt ${attempt} failed for session ${sessionId}:`, error.message);
+      
+      // If this is an exit code 69 error, try the raw command approach
+      if (error.message.includes('exited with code 69') || error.message.includes('Conversion failed')) {
+        try {
+          console.log(`Attempting raw FFmpeg command fallback for session ${sessionId}`);
+          return await captureFromSourceRaw(sessionId, sourceConfig);
+        } catch (rawError) {
+          console.error(`Raw FFmpeg fallback also failed for session ${sessionId}:`, rawError.message);
+          // Continue with normal retry logic if raw command also fails
+        }
+      }
+      
+      if (attempt === maxRetries) {
+        console.error(`All ${maxRetries} capture attempts failed for session ${sessionId}`);
+        throw error;
+      }
+      
+      // Wait before retry (exponential backoff: 1s, 2s, 4s)
+      const waitTime = 1000 * Math.pow(2, attempt - 1);
+      console.log(`Waiting ${waitTime}ms before retry ${attempt + 1} for session ${sessionId}`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
 }
 
 // FFmpeg command builders for different source types
 function buildRtspCapture(rtspUrl, outputFile) {
   return ffmpeg(rtspUrl)
     .inputOptions([
+      '-hwaccel', 'cuda',     // Enable Nvidia hardware acceleration for decoding
       '-rtsp_transport', 'tcp',
       '-timeout', '5000000',
       '-analyzeduration', '2000000',
-      '-probesize', '2000000'
+      '-probesize', '2000000',
+      '-fflags', '+genpts',
+      '-avoid_negative_ts', 'make_zero'
     ])
-    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .outputOptions([
+      '-vframes', '1',        // Use -vframes instead of -frames:v
+      '-q:v', '2',
+      '-f', 'mjpeg',          // Use mjpeg format for more reliable JPEG output
+      '-y'                    // Overwrite without asking
+    ])
+    .format('mjpeg')          // Explicitly set format
     .output(outputFile);
 }
 
@@ -102,6 +302,7 @@ function buildV4L2Capture(config, outputFile) {
   const { devicePath, format, resolution, fps } = config;
 
   const inputOptions = [
+    '-hwaccel', 'cuda',     // Enable Nvidia hardware acceleration for decoding
     '-f v4l2',
     format ? `-input_format ${format}` : '',
     resolution ? `-video_size ${resolution}` : '',
@@ -110,7 +311,13 @@ function buildV4L2Capture(config, outputFile) {
 
   return ffmpeg(devicePath)
     .inputOptions(inputOptions)
-    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .outputOptions([
+      '-vframes', '1',
+      '-q:v', '2',
+      '-f', 'mjpeg',
+      '-y'
+    ])
+    .format('mjpeg')
     .output(outputFile);
 }
 
@@ -118,19 +325,31 @@ function buildHttpCapture(config, outputFile) {
   const { httpUrl, streamFormat } = config;
 
   const inputOptions = streamFormat === 'hls'
-    ? ['-live_start_index -1', '-timeout 10000000']
-    : ['-timeout 10000000'];
+    ? ['-hwaccel', 'cuda', '-live_start_index -1', '-timeout 10000000']
+    : ['-hwaccel', 'cuda', '-timeout 10000000'];
 
   return ffmpeg(httpUrl)
     .inputOptions(inputOptions)
-    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .outputOptions([
+      '-vframes', '1',
+      '-q:v', '2',
+      '-f', 'mjpeg',
+      '-y'
+    ])
+    .format('mjpeg')
     .output(outputFile);
 }
 
 function buildRtmpCapture(rtmpUrl, outputFile) {
   return ffmpeg(rtmpUrl)
-    .inputOptions(['-timeout 10000000'])
-    .outputOptions(['-frames:v 1', '-q:v 2'])
+    .inputOptions(['-hwaccel', 'cuda', '-timeout 10000000'])
+    .outputOptions([
+      '-vframes', '1',
+      '-q:v', '2',
+      '-f', 'mjpeg',
+      '-y'
+    ])
+    .format('mjpeg')
     .output(outputFile);
 }
 
@@ -139,20 +358,33 @@ function buildScreenCapture(config, outputFile) {
   const platform = process.platform;
 
   if (platform === 'linux') {
-    const inputOptions = ['-f x11grab'];
+    const inputOptions = ['-hwaccel', 'cuda', '-f x11grab'];
     if (region) {
       inputOptions.push(`-video_size ${region}`);
     }
 
     return ffmpeg(display || ':0.0')
       .inputOptions(inputOptions)
-      .outputOptions(['-frames:v 1', '-q:v 2'])
+      .outputOptions([
+        '-vframes', '1',
+        '-q:v', '2',
+        '-f', 'mjpeg',
+        '-y'
+      ])
+      .format('mjpeg')
       .output(outputFile);
   } else if (platform === 'win32') {
     return ffmpeg()
       .input('desktop')
       .inputFormat('gdigrab')
-      .outputOptions(['-frames:v 1', '-q:v 2'])
+      .inputOptions(['-hwaccel', 'cuda'])
+      .outputOptions([
+        '-vframes', '1',
+        '-q:v', '2',
+        '-f', 'mjpeg',
+        '-y'
+      ])
+      .format('mjpeg')
       .output(outputFile);
   } else {
     throw new Error(`Screen capture not supported on platform: ${platform}`);
@@ -243,6 +475,7 @@ app.post('/api/test-connection', async (req, res) => {
   try {
     const command = ffmpeg(url)
       .inputOptions([
+        '-hwaccel', 'cuda',     // Enable Nvidia hardware acceleration for decoding
         '-rtsp_transport', 'tcp',
         '-timeout', '10000000', // Connection timeout in microseconds (10 seconds)
         '-analyzeduration', '2000000',
@@ -356,8 +589,8 @@ function captureSnapshot(session) {
   const sessionDir = path.join(snapshotsDir, session.id);
   const snapshotFile = path.join(sessionDir, `snapshot-${Date.now()}.jpg`);
 
-  // Use unified capture function
-  captureFromSource(session.id, session.sourceConfig)
+  // Use unified capture function with retry logic
+  captureWithRetry(session.id, session.sourceConfig)
     .then((capturedFile) => {
       const relativePath = `/snapshots/${session.id}/${path.basename(capturedFile)}`;
 
@@ -444,58 +677,80 @@ app.get('/api/session/:sessionId', (req, res) => {
 });
 
 app.post('/api/generate-timelapse', (req, res) => {
-  const { sessionId, fps } = req.body;
+  const { sessionId, fps, format = 'mp4' } = req.body;
   const session = db.getSession(sessionId);
   const snapshots = db.getSnapshots(sessionId);
 
   if (!session || snapshots.length < 2) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Invalid session or insufficient snapshots' 
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid session or insufficient snapshots'
     });
   }
 
-  const outputFile = path.join(videosDir, `timelapse-${sessionId}.mp4`);
+  // Validate format
+  if (!['mp4', 'gif'].includes(format)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid format. Supported formats: mp4, gif'
+    });
+  }
+
+  const extension = format === 'gif' ? 'gif' : 'mp4';
+  const outputFile = path.join(videosDir, `timelapse-${sessionId}.${extension}`);
   const sessionDir = path.join(snapshotsDir, sessionId);
   const fileListPath = path.join(sessionDir, 'filelist.txt');
-  
+
   const fileList = snapshots
     .map(s => `file '${path.join(__dirname, s.file_path.replace(/^\//, ''))}'`)
     .join('\n');
-  
+
   fs.writeFileSync(fileListPath, fileList);
 
-  ffmpeg()
+  const command = ffmpeg()
     .input(fileListPath)
-    .inputOptions(['-f concat', '-safe 0', '-r', fps.toString()])
-    .outputOptions([
-      '-c:v libx264',
+    .inputOptions(['-hwaccel cuda', '-f concat', '-safe 0', '-r', fps.toString()]);
+
+  if (format === 'gif') {
+    // GIF output options
+    command.outputOptions([
+      '-vf', 'fps=10,scale=640:-1:flags=lanczos', // Scale down for GIF size
+      '-gifflags', '+transdiff'  // Optimize GIF
+    ]);
+  } else {
+    // MP4 output options
+    command.outputOptions([
+      '-c:v h264_nvenc',     // Use Nvidia hardware encoder
       '-pix_fmt yuv420p',
-      '-preset medium',
-      '-crf 23'
-    ])
+      '-preset fast',         // Use fast preset for hardware encoding
+      '-cq 23'                // Use constant quality instead of CRF for NVENC
+    ]);
+  }
+
+  command
     .output(outputFile)
     .on('end', () => {
       if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
-      const videoUrl = `/videos/timelapse-${sessionId}.mp4`;
-      
+      const videoUrl = `/videos/timelapse-${sessionId}.${extension}`;
+
       // Save video to database
       try {
         const stats = fs.statSync(outputFile);
-        db.addVideo(sessionId, videoUrl, parseInt(fps), {
+        db.addVideo(sessionId, videoUrl, parseInt(fps), format, {
           file_size: stats.size
         });
       } catch (error) {
         console.error('Error saving video to database:', error);
       }
-      
+
       broadcast({
         type: 'timelapse-ready',
         sessionId: sessionId,
-        videoUrl: videoUrl
+        videoUrl: videoUrl,
+        format: format
       });
 
-      res.json({ success: true, videoUrl: videoUrl });
+      res.json({ success: true, videoUrl: videoUrl, format: format });
     })
     .on('error', (err) => {
       console.error('Error generating timelapse:', err);
@@ -672,7 +927,7 @@ app.post('/api/test-source', async (req, res) => {
   }, 15000);
 
   try {
-    await captureFromSource('test-session', sourceConfig);
+    await captureWithRetry('test-session', sourceConfig);
 
     clearTimeout(timeout);
     if (!responseHandled) {
@@ -817,20 +1072,43 @@ app.post('/api/upload-photos', upload.array('photos', 50), async (req, res) => {
 // New API endpoint to list child directories
 app.get('/api/list-child-directories', (req, res) => {
   try {
-    const { parentPath } = req.query;
+    let { parentPath } = req.query;
 
-    if (!parentPath) {
-      return res.status(400).json({ success: false, message: 'Parent path required' });
+    // If no parentPath provided, use DEFAULT_PARENT_PATH from environment
+    if (!parentPath || !parentPath.trim()) {
+      parentPath = DEFAULT_PARENT_PATH;
+    }
+
+    // If still no path (environment variable not set), return default path info
+    if (!parentPath || !parentPath.trim()) {
+      return res.json({
+        success: true,
+        parentPath: '',
+        childDirectories: [],
+        defaultParentPath: DEFAULT_PARENT_PATH
+      });
     }
 
     // Validate parent path exists
     if (!fs.existsSync(parentPath)) {
-      return res.status(400).json({ success: false, message: 'Parent path does not exist' });
+      return res.json({
+        success: true,
+        parentPath: '',
+        childDirectories: [],
+        defaultParentPath: DEFAULT_PARENT_PATH,
+        error: 'Parent path does not exist'
+      });
     }
 
     // Check if it's a directory
     if (!fs.statSync(parentPath).isDirectory()) {
-      return res.status(400).json({ success: false, message: 'Parent path is not a directory' });
+      return res.json({
+        success: true,
+        parentPath: '',
+        childDirectories: [],
+        defaultParentPath: DEFAULT_PARENT_PATH,
+        error: 'Parent path is not a directory'
+      });
     }
 
     // Get child directories
@@ -1156,8 +1434,8 @@ async function captureMqttSnapshot(sessionId) {
   const sourceConfig = session.source_config ? JSON.parse(session.source_config) : {};
 
   try {
-    // Use unified capture function for any source type
-    const snapshotFile = await captureFromSource(sessionId, sourceConfig);
+    // Use unified capture function with retry logic for any source type
+    const snapshotFile = await captureWithRetry(sessionId, sourceConfig);
     const relativePath = `/snapshots/${sessionId}/${path.basename(snapshotFile)}`;
 
     // Save snapshot to database
@@ -1397,17 +1675,26 @@ function checkQuotaBeforeCapture(sessionId) {
 // Video download endpoint with forced download headers
 app.get('/api/download/video/:sessionId', (req, res) => {
   const { sessionId } = req.params;
-  const videoPath = path.join(videosDir, `timelapse-${sessionId}.mp4`);
+
+  // Check for both MP4 and GIF files
+  let videoPath = path.join(videosDir, `timelapse-${sessionId}.mp4`);
+  let format = 'mp4';
+
+  if (!fs.existsSync(videoPath)) {
+    videoPath = path.join(videosDir, `timelapse-${sessionId}.gif`);
+    format = 'gif';
+  }
 
   if (!fs.existsSync(videoPath)) {
     return res.status(404).json({ success: false, message: 'Video not found' });
   }
 
-  const filename = `timelapse-${sessionId}.mp4`;
+  const filename = `timelapse-${sessionId}.${format}`;
+  const contentType = format === 'gif' ? 'image/gif' : 'video/mp4';
 
   // Set headers to force download
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Type', contentType);
 
   // Stream the file
   const fileStream = fs.createReadStream(videoPath);
