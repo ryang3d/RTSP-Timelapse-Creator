@@ -45,8 +45,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=http://solideon-frigate1.local:3001
-        - REACT_APP_WS_URL=ws://solideon-frigate1.local:3002
+        - REACT_APP_API_URL=http://localhost:3001
+        - REACT_APP_WS_URL=ws://localhost:3002
     ports:
       - "3000:80"
     depends_on:
