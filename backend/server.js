@@ -33,6 +33,10 @@ const db = new DatabaseManager();
 // Keep track of active capture processes
 const activeCaptures = new Map();
 
+// Track consecutive failures per session to prevent premature stopping
+const consecutiveFailures = new Map();
+const MAX_CONSECUTIVE_FAILURES = 10; // Stop only after 10 consecutive failures
+
 // MQTT client management
 const mqttClients = new Map();
 
@@ -81,6 +85,46 @@ async function captureFromSource(sessionId, sourceConfig) {
   }
 
   return new Promise((resolve, reject) => {
+    let isResolved = false;
+    let isEnded = false;
+    
+    // Helper function to verify and resolve/reject
+    const verifyAndResolve = () => {
+      if (isResolved) return;
+      
+      try {
+        if (fs.existsSync(snapshotFile)) {
+          const stats = fs.statSync(snapshotFile);
+          if (stats.size > 0) {
+            console.log(`Successfully captured snapshot for session ${sessionId}: ${path.basename(snapshotFile)} (${stats.size} bytes)`);
+            isResolved = true;
+            resolve(snapshotFile);
+            return true;
+          } else {
+            // Clean up empty file
+            fs.unlinkSync(snapshotFile);
+            if (!isResolved) {
+              isResolved = true;
+              reject(new Error('Snapshot file was created but is empty'));
+            }
+            return false;
+          }
+        } else {
+          if (!isResolved) {
+            isResolved = true;
+            reject(new Error('Snapshot file was not created'));
+          }
+          return false;
+        }
+      } catch (verifyError) {
+        if (!isResolved) {
+          isResolved = true;
+          reject(new Error(`Failed to verify snapshot file: ${verifyError.message}`));
+        }
+        return false;
+      }
+    };
+    
     command
       .on('start', (commandLine) => {
         console.log(`=== FFmpeg Command Debug for session ${sessionId} ===`);
@@ -91,44 +135,59 @@ async function captureFromSource(sessionId, sourceConfig) {
       })
       .on('stderr', (stderrLine) => {
         console.log(`FFmpeg stderr for session ${sessionId}:`, stderrLine);
+        
+        // Check for warning-level messages vs fatal errors
+        // H.264 decoding errors like "cabac_init_idc overflow" or "decode_slice_header error"
+        // are often recoverable warnings, not fatal errors
+        const isWarningOnly = stderrLine.includes('cabac_init_idc') ||
+                             stderrLine.includes('decode_slice_header') ||
+                             stderrLine.includes('no frame!') ||
+                             stderrLine.includes('deprecated pixel format');
+        
+        if (isWarningOnly) {
+          console.log(`FFmpeg warning (non-fatal) for session ${sessionId}: ${stderrLine}`);
+        }
       })
       .on('progress', (progress) => {
         console.log(`FFmpeg progress for session ${sessionId}:`, JSON.stringify(progress));
       })
       .on('end', () => {
+        isEnded = true;
         // Verify file was created and has content
-        try {
-          if (fs.existsSync(snapshotFile)) {
-            const stats = fs.statSync(snapshotFile);
-            if (stats.size > 0) {
-              console.log(`Successfully captured snapshot for session ${sessionId}: ${path.basename(snapshotFile)} (${stats.size} bytes)`);
-              resolve(snapshotFile);
-            } else {
-              // Clean up empty file
-              fs.unlinkSync(snapshotFile);
-              reject(new Error('Snapshot file was created but is empty'));
-            }
-          } else {
-            reject(new Error('Snapshot file was not created'));
-          }
-        } catch (verifyError) {
-          reject(new Error(`Failed to verify snapshot file: ${verifyError.message}`));
-        }
+        verifyAndResolve();
       })
       .on('error', (err) => {
-        console.error(`FFmpeg error for session ${sessionId}:`, err.message);
+        console.error(`FFmpeg error event for session ${sessionId}:`, err.message);
         
-        // Clean up failed file if it exists
-        try {
-          if (fs.existsSync(snapshotFile)) {
-            fs.unlinkSync(snapshotFile);
-            console.log(`Cleaned up failed snapshot file: ${snapshotFile}`);
-          }
-        } catch (cleanupErr) {
-          console.error('Failed to cleanup failed snapshot:', cleanupErr.message);
+        // Even if error event fires, check if file was actually created
+        // FFmpeg may emit warnings/errors in stderr that trigger error events
+        // but still produce valid output
+        if (!isResolved) {
+          // Small delay to allow file I/O to complete
+          setTimeout(() => {
+            if (!isResolved && verifyAndResolve()) {
+              // File is valid despite error event - this was likely a warning treated as error
+              console.log(`Session ${sessionId}: Captured file is valid despite FFmpeg error event`);
+              return;
+            }
+            
+            // File doesn't exist or is invalid - this is a real error
+            if (!isResolved) {
+              // Clean up failed file if it exists
+              try {
+                if (fs.existsSync(snapshotFile)) {
+                  fs.unlinkSync(snapshotFile);
+                  console.log(`Cleaned up failed snapshot file: ${snapshotFile}`);
+                }
+              } catch (cleanupErr) {
+                console.error('Failed to cleanup failed snapshot:', cleanupErr.message);
+              }
+              
+              isResolved = true;
+              reject(err);
+            }
+          }, 100); // 100ms delay to allow file system writes
         }
-        
-        reject(err);
       })
       .run();
   });
@@ -285,8 +344,10 @@ function buildRtspCapture(rtspUrl, outputFile) {
       '-timeout', '5000000',
       '-analyzeduration', '2000000',
       '-probesize', '2000000',
-      '-fflags', '+genpts',
-      '-avoid_negative_ts', 'make_zero'
+      '-fflags', '+genpts+discardcorrupt', // Generate PTS and discard corrupted frames
+      '-avoid_negative_ts', 'make_zero',
+      '-err_detect', 'ignore_err',  // Ignore decoding errors and continue (handles H.264 corruption)
+      '-flags', 'low_delay'         // Reduce buffering delays for better RTSP handling
     ])
     .outputOptions([
       '-vframes', '1',        // Use -vframes instead of -frames:v
@@ -592,6 +653,9 @@ function captureSnapshot(session) {
   // Use unified capture function with retry logic
   captureWithRetry(session.id, session.sourceConfig)
     .then((capturedFile) => {
+      // Reset failure counter on successful capture
+      consecutiveFailures.delete(session.id);
+
       const relativePath = `/snapshots/${session.id}/${path.basename(capturedFile)}`;
 
       // Save snapshot to database
@@ -620,6 +684,7 @@ function captureSnapshot(session) {
           session.active = false;
           db.updateSession(session.id, { active: 0, completed_at: new Date().toISOString() });
           activeCaptures.delete(session.id);
+          consecutiveFailures.delete(session.id);
           broadcast({ type: 'capture-complete', sessionId: session.id });
           return;
         }
@@ -631,11 +696,39 @@ function captureSnapshot(session) {
     })
     .catch((err) => {
       console.error('Error capturing snapshot:', err);
+      
+      // Track consecutive failures
+      const failureCount = (consecutiveFailures.get(session.id) || 0) + 1;
+      consecutiveFailures.set(session.id, failureCount);
+      
+      console.log(`Session ${session.id}: ${failureCount} consecutive failure(s) (max: ${MAX_CONSECUTIVE_FAILURES})`);
+      
       broadcast({
         type: 'error',
         sessionId: session.id,
-        message: err.message
+        message: err.message,
+        consecutiveFailures: failureCount
       });
+
+      // Only stop capture if we've exceeded the maximum consecutive failures
+      if (failureCount >= MAX_CONSECUTIVE_FAILURES) {
+        console.error(`Session ${session.id}: Stopping capture due to ${failureCount} consecutive failures`);
+        session.active = false;
+        db.updateSession(session.id, { active: 0, completed_at: new Date().toISOString() });
+        activeCaptures.delete(session.id);
+        consecutiveFailures.delete(session.id);
+        broadcast({
+          type: 'capture-stopped',
+          sessionId: session.id,
+          reason: `Capture stopped after ${failureCount} consecutive failures`
+        });
+        return;
+      }
+
+      // Continue capture loop despite failure (resilient behavior)
+      if (session.active) {
+        setTimeout(() => captureSnapshot(session), session.interval * 1000);
+      }
     });
 }
 
@@ -646,6 +739,7 @@ app.post('/api/stop-capture', (req, res) => {
   if (session) {
     session.active = false;
     activeCaptures.delete(sessionId);
+    consecutiveFailures.delete(sessionId); // Clean up failure counter
     
     // Update database
     db.updateSession(sessionId, { active: 0, completed_at: new Date().toISOString() });
@@ -936,6 +1030,7 @@ app.delete('/api/session/:sessionId', (req, res) => {
     if (activeSession) {
       activeSession.active = false;
       activeCaptures.delete(sessionId);
+      consecutiveFailures.delete(sessionId); // Clean up failure counter
     }
     
     // Delete files
@@ -1742,8 +1837,9 @@ async function cleanupOrphanedFiles() {
     }
     
     // Get all files referenced in database
-    const dbSnapshots = db.prepare('SELECT file_path FROM snapshots').all();
-    const dbVideos = db.prepare('SELECT file_path FROM videos').all();
+    // Access the underlying better-sqlite3 database instance
+    const dbSnapshots = db.db.prepare('SELECT file_path FROM snapshots').all();
+    const dbVideos = db.db.prepare('SELECT file_path FROM videos').all();
     
     const dbSnapshotPaths = new Set(dbSnapshots.map(s => path.join(__dirname, s.file_path.replace(/^\//, ''))));
     const dbVideoPaths = new Set(dbVideos.map(v => path.join(__dirname, v.file_path.replace(/^\//, ''))));
