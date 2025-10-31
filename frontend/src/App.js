@@ -14,6 +14,11 @@ function App() {
   const [useTimer, setUseTimer] = useState(false);
   const [fps, setFps] = useState(30);
   const [outputFormat, setOutputFormat] = useState('mp4');
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const [resolutionScale, setResolutionScale] = useState('original');
+  const [gifFps, setGifFps] = useState(10);
+  const [gifColors, setGifColors] = useState(256);
+  const [gifDither, setGifDither] = useState('floyd_steinberg');
   const [processing, setProcessing] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
   const [generatedFormat, setGeneratedFormat] = useState('mp4');
@@ -86,6 +91,11 @@ function App() {
   const [sessions, setSessions] = useState([]);
   const [storageStats, setStorageStats] = useState(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
+  const [expandedSessionId, setExpandedSessionId] = useState(null);
+  const [sessionSnapshots, setSessionSnapshots] = useState({}); // Object to store snapshots per session ID
+  const [loadingSnapshots, setLoadingSnapshots] = useState({}); // Object to track loading state per session ID
+  const [sessionVideos, setSessionVideos] = useState({}); // Object to store videos per session ID
+  const [loadingVideos, setLoadingVideos] = useState({}); // Object to track loading state for videos
   
   const wsRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -114,9 +124,14 @@ function App() {
           break;
         case 'timelapse-ready':
           if (data.sessionId === sessionId) {
+            // Set the latest video URL (for current session view)
             setVideoUrl(`${API_URL}${data.videoUrl}`);
             setGeneratedFormat(data.format || 'mp4');
             setProcessing(false);
+          }
+          // Reload videos for this session if we're viewing it in sessions management
+          if (expandedSessionId === data.sessionId) {
+            loadSessionVideos(data.sessionId);
           }
           break;
         case 'error':
@@ -262,7 +277,15 @@ function App() {
       const response = await fetch(`${API_URL}/api/generate-timelapse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, fps, format: outputFormat })
+        body: JSON.stringify({ 
+          sessionId, 
+          fps, 
+          format: outputFormat,
+          resolutionScale,
+          gifFps,
+          gifColors,
+          gifDither
+        })
       });
 
       const data = await response.json();
@@ -653,6 +676,78 @@ function App() {
     }
   };
 
+  const loadSessionVideos = async (sessionId) => {
+    setLoadingVideos(prev => ({ ...prev, [sessionId]: true }));
+    
+    try {
+      const response = await fetch(`${API_URL}/api/session/${sessionId}/videos`);
+      const data = await response.json();
+      
+      if (data.success && Array.isArray(data.videos)) {
+        const videoList = data.videos.map(video => ({
+          id: video.id,
+          url: `${API_URL}${video.file_path}`,
+          filename: video.file_path.split('/').pop(),
+          format: video.format,
+          fps: video.fps,
+          fileSize: video.file_size,
+          createdAt: new Date(video.created_at).toLocaleString()
+        }));
+        setSessionVideos(prev => ({ ...prev, [sessionId]: videoList }));
+      } else {
+        setSessionVideos(prev => ({ ...prev, [sessionId]: [] }));
+      }
+    } catch (error) {
+      console.error('Error loading session videos:', error);
+      setSessionVideos(prev => ({ ...prev, [sessionId]: [] }));
+    } finally {
+      setLoadingVideos(prev => ({ ...prev, [sessionId]: false }));
+    }
+  };
+
+  const loadSessionSnapshots = async (sessionId) => {
+    if (expandedSessionId === sessionId) {
+      // If already expanded, collapse it
+      setExpandedSessionId(null);
+      return;
+    }
+
+    // Set loading state and expanded session ID first (so UI shows the loading state)
+    setLoadingSnapshots(prev => ({ ...prev, [sessionId]: true }));
+    setExpandedSessionId(sessionId);
+    
+    // Also load videos when expanding a session
+    loadSessionVideos(sessionId);
+    
+    try {
+      const response = await fetch(`${API_URL}/api/session/${sessionId}`);
+      const data = await response.json();
+      
+      console.log('Session data loaded for', sessionId, ':', data); // Debug log
+      
+      if (data.success && data.session && Array.isArray(data.session.snapshots) && data.session.snapshots.length > 0) {
+        console.log('Snapshots found:', data.session.snapshots.length); // Debug log
+        const snapshotUrls = data.session.snapshots.map(snap => ({
+          url: `${API_URL}${snap.file_path}`,
+          timestamp: new Date(snap.captured_at).getTime(),
+          capturedAt: new Date(snap.captured_at).toLocaleString(),
+          filename: snap.file_path.split('/').pop()
+        }));
+        console.log('Processed snapshots:', snapshotUrls.length); // Debug log
+        setSessionSnapshots(prev => ({ ...prev, [sessionId]: snapshotUrls }));
+      } else {
+        console.log('No snapshots found or invalid response', data); // Debug log
+        setSessionSnapshots(prev => ({ ...prev, [sessionId]: [] }));
+      }
+    } catch (error) {
+      console.error('Error loading session snapshots:', error);
+      setSessionSnapshots(prev => ({ ...prev, [sessionId]: [] }));
+      setExpandedSessionId(null);
+    } finally {
+      setLoadingSnapshots(prev => ({ ...prev, [sessionId]: false }));
+    }
+  };
+
   const stopSession = async (sessionId) => {
     if (!window.confirm('Are you sure you want to stop this session? This will end the active capture.')) {
       return;
@@ -767,7 +862,7 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-8">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold text-slate-100 mb-8 text-center">
-          📹 Timelapse Creator
+          ⏱️ Timelapse Creator
         </h1>
 
         {/* New Navigation */}
@@ -1001,29 +1096,106 @@ function App() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-white">
@@ -1109,29 +1281,106 @@ function App() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-slate-100">
@@ -1202,29 +1451,106 @@ function App() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-100 mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-100 mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-100 mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 hover:bg-slate-700 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-slate-700/50 border border-slate-600 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-100 mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-slate-100 mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-100 mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-slate-100 mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-slate-100 mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-white">
@@ -1318,29 +1644,106 @@ function App() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-white">
@@ -1441,31 +1844,6 @@ function App() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                  <input
-                    type="number"
-                    value={fps}
-                    onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                    min="1"
-                    max="60"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                  <select
-                    value={outputFormat}
-                    onChange={(e) => setOutputFormat(e.target.value)}
-                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  >
-                    <option value="mp4">MP4 Video</option>
-                    <option value="gif">GIF Animation</option>
-                  </select>
-                </div>
-              </div>
-
               <div className="flex gap-2">
                 {!isCapturing ? (
                   <button
@@ -1484,6 +1862,108 @@ function App() {
                     <Square className="w-5 h-5" />
                     Stop Capture
                   </button>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                <select
+                  value={outputFormat}
+                  onChange={(e) => setOutputFormat(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="mp4">MP4 Video</option>
+                  <option value="gif">GIF Animation</option>
+                </select>
+              </div>
+
+              <div className="space-y-4">
+                <button
+                  type="button"
+                  onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                  className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                >
+                  <span className="text-sm font-medium">Advanced Options</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                </button>
+
+                {advancedExpanded && (
+                  <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                      <input
+                        type="number"
+                        value={fps}
+                        onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                        min="1"
+                        max="60"
+                        className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                      <select
+                        value={resolutionScale}
+                        onChange={(e) => setResolutionScale(e.target.value)}
+                        className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      >
+                        <option value="original">Original</option>
+                        <option value="4k">4K UltraHD (3840x2160)</option>
+                        <option value="1080p">1080p (1920x1080)</option>
+                        <option value="720p">720p (1280x720)</option>
+                        <option value="480p">480p (854x480)</option>
+                        <option value="360p">360p (640x360)</option>
+                      </select>
+                    </div>
+
+                    {outputFormat === 'gif' && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                          <input
+                            type="number"
+                            value={gifFps}
+                            onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                            min="1"
+                            max="30"
+                            className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                          <select
+                            value={gifColors}
+                            onChange={(e) => setGifColors(parseInt(e.target.value))}
+                            className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="256">256 (Full Palette)</option>
+                            <option value="128">128</option>
+                            <option value="64">64</option>
+                            <option value="32">32</option>
+                            <option value="16">16</option>
+                            <option value="8">8</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                          <select
+                            value={gifDither}
+                            onChange={(e) => setGifDither(e.target.value)}
+                            className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="floyd_steinberg">Floyd-Steinberg</option>
+                            <option value="bayer">Bayer</option>
+                            <option value="sierra2">Sierra2</option>
+                            <option value="sierra2_4a">Sierra2-4a</option>
+                            <option value="none">None</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -1568,29 +2048,106 @@ function App() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-white">
@@ -1694,29 +2251,106 @@ function App() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-white">
@@ -1997,29 +2631,106 @@ function App() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
-                    <input
-                      type="number"
-                      value={fps}
-                      onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
-                      min="1"
-                      max="60"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">Output Format</label>
-                    <select
-                      value={outputFormat}
-                      onChange={(e) => setOutputFormat(e.target.value)}
-                      className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="mp4">MP4 Video</option>
-                      <option value="gif">GIF Animation</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    <option value="mp4">MP4 Video</option>
+                    <option value="gif">GIF Animation</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedExpanded(!advancedExpanded)}
+                    className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                  >
+                    <span className="text-sm font-medium">Advanced Options</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedExpanded ? 'transform rotate-180' : ''}`} />
+                  </button>
+
+                  {advancedExpanded && (
+                    <div className="space-y-4 p-4 bg-white/5 border border-white/20 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Timelapse FPS</label>
+                        <input
+                          type="number"
+                          value={fps}
+                          onChange={(e) => setFps(Math.max(1, Math.min(60, parseInt(e.target.value) || 30)))}
+                          min="1"
+                          max="60"
+                          className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-white mb-2">Resolution Scale</label>
+                        <select
+                          value={resolutionScale}
+                          onChange={(e) => setResolutionScale(e.target.value)}
+                          className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        >
+                          <option value="original">Original</option>
+                          <option value="4k">4K UltraHD (3840x2160)</option>
+                          <option value="1080p">1080p (1920x1080)</option>
+                          <option value="720p">720p (1280x720)</option>
+                          <option value="480p">480p (854x480)</option>
+                          <option value="360p">360p (640x360)</option>
+                        </select>
+                      </div>
+
+                      {outputFormat === 'gif' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Framerate</label>
+                            <input
+                              type="number"
+                              value={gifFps}
+                              onChange={(e) => setGifFps(Math.max(1, Math.min(30, parseInt(e.target.value) || 10)))}
+                              min="1"
+                              max="30"
+                              className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Colors</label>
+                            <select
+                              value={gifColors}
+                              onChange={(e) => setGifColors(parseInt(e.target.value))}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="256">256 (Full Palette)</option>
+                              <option value="128">128</option>
+                              <option value="64">64</option>
+                              <option value="32">32</option>
+                              <option value="16">16</option>
+                              <option value="8">8</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">GIF Dithering</label>
+                            <select
+                              value={gifDither}
+                              onChange={(e) => setGifDither(e.target.value)}
+                              className="w-full px-4 py-2 bg-gray-800 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="floyd_steinberg">Floyd-Steinberg</option>
+                              <option value="bayer">Bayer</option>
+                              <option value="sierra2">Sierra2</option>
+                              <option value="sierra2_4a">Sierra2-4a</option>
+                              <option value="none">None</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-white">
@@ -2152,7 +2863,7 @@ function App() {
                                 <div>Size: {Math.round((session.total_snapshot_size || 0) / 1024 / 1024)}MB</div>
                               </div>
                             </div>
-                            <div className="ml-4 flex gap-2">
+                            <div className="ml-4 flex gap-2 flex-wrap">
                               {session.active && (
                                 <button
                                   onClick={() => stopSession(session.id)}
@@ -2169,14 +2880,15 @@ function App() {
                                 <Play className="w-3 h-3" />
                                 {session.active ? 'Resume' : 'Open'}
                               </button>
-                              {session.video_count > 0 && (
-                                <a
-                                  href={`${API_URL}/api/download/video/${session.id}`}
-                                  className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                              {session.snapshot_count > 0 && (
+                                <button
+                                  onClick={() => loadSessionSnapshots(session.id)}
+                                  disabled={loadingSnapshots[session.id]}
+                                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded flex items-center gap-1 transition-colors disabled:opacity-50"
                                 >
-                                  <Download className="w-3 h-3" />
-                                  Download Video
-                                </a>
+                                  <Camera className="w-3 h-3" />
+                                  {expandedSessionId === session.id ? 'Hide' : 'View'} Snapshots/Videos
+                                </button>
                               )}
                               {session.snapshot_count > 0 && (
                                 <a
@@ -2196,6 +2908,136 @@ function App() {
                               </button>
                             </div>
                           </div>
+                          
+                          {/* Snapshots Grid - Expanded View */}
+                          {expandedSessionId === session.id && (
+                            <div className="mt-4 pt-4 border-t border-white/10">
+                              {loadingSnapshots[session.id] ? (
+                                <div className="text-center text-gray-400 py-4">
+                                  Loading snapshots...
+                                </div>
+                              ) : !sessionSnapshots[session.id] || sessionSnapshots[session.id].length === 0 ? (
+                                <div className="text-center text-gray-400 py-4">
+                                  No snapshots found
+                                </div>
+                              ) : (
+                                <>
+                                  <h4 className="text-sm font-medium text-white mb-2">
+                                    Snapshots ({sessionSnapshots[session.id].length} total) - Ordered by capture time
+                                  </h4>
+                                  <div className="grid grid-cols-4 gap-2 max-h-96 overflow-y-auto pr-2">
+                                    {[...sessionSnapshots[session.id]].reverse().map((snap) => (
+                                      <div key={snap.timestamp || snap.url} className="relative group">
+                                        <img
+                                          src={snap.url}
+                                          alt="Snapshot"
+                                          className="w-full aspect-video object-cover rounded border border-white/20"
+                                          onError={(e) => {
+                                            console.error('Failed to load image:', snap.url, e);
+                                            e.target.style.display = 'none';
+                                          }}
+                                          onLoad={() => console.log('Image loaded:', snap.url)}
+                                        />
+                                        {snap.capturedAt && (
+                                          <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs p-1 rounded-b opacity-0 group-hover:opacity-100 transition-opacity">
+                                            {snap.capturedAt}
+                                          </div>
+                                        )}
+                                        {/* Download button overlay */}
+                                        <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button
+                                            onClick={() => {
+                                              const link = document.createElement('a');
+                                              link.href = `${API_URL}/api/download/photo/${session.id}/${snap.filename}`;
+                                              link.download = snap.filename;
+                                              document.body.appendChild(link);
+                                              link.click();
+                                              document.body.removeChild(link);
+                                            }}
+                                            className="bg-blue-600 hover:bg-blue-700 text-white p-1 rounded-full shadow-lg"
+                                            title="Download this photo"
+                                          >
+                                            <Download className="w-3 h-3" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {/* Download all photos button */}
+                                  <div className="mt-4 flex justify-center">
+                                    <a
+                                      href={`${API_URL}/api/download/photos/${session.id}`}
+                                      className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
+                                    >
+                                      <Download className="w-4 h-4" />
+                                      Download All Photos (ZIP)
+                                    </a>
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Videos List */}
+                              {session.video_count > 0 && (
+                                <div className="mt-6 pt-4 border-t border-white/10">
+                                  <h4 className="text-sm font-medium text-white mb-3">
+                                    Timelapses ({session.video_count} total)
+                                  </h4>
+                                  {loadingVideos[session.id] ? (
+                                    <div className="text-center text-gray-400 py-4">
+                                      Loading videos...
+                                    </div>
+                                  ) : !sessionVideos[session.id] || sessionVideos[session.id].length === 0 ? (
+                                    <div className="text-center text-gray-400 py-4">
+                                      No videos found
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-3">
+                                      {sessionVideos[session.id].map((video) => (
+                                        <div key={video.id} className="bg-white/5 border border-white/10 rounded-lg p-3">
+                                          <div className="flex items-start justify-between gap-4">
+                                            <div className="flex-1">
+                                              <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-white font-medium text-sm">
+                                                  {video.format.toUpperCase()} - {video.fps} FPS
+                                                </span>
+                                                {video.fileSize && (
+                                                  <span className="text-gray-400 text-xs">
+                                                    ({Math.round(video.fileSize / 1024 / 1024 * 10) / 10} MB)
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <div className="text-xs text-gray-400 space-y-1">
+                                                <div>Created: {video.createdAt}</div>
+                                                <div>File: {video.filename}</div>
+                                              </div>
+                                            </div>
+                                            <div className="flex gap-2">
+                                              <a
+                                                href={video.url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                                              >
+                                                <Play className="w-3 h-3" />
+                                                Preview
+                                              </a>
+                                              <a
+                                                href={`${API_URL}/api/download/video/${session.id}?filename=${encodeURIComponent(video.filename)}`}
+                                                className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                                              >
+                                                <Download className="w-3 h-3" />
+                                                Download
+                                              </a>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2229,8 +3071,8 @@ function App() {
                   <h3 className="text-sm font-medium text-white mb-2">
                     Recent Snapshots ({snapshots.length} total) - Ordered by capture time
                   </h3>
-                  <div className="grid grid-cols-4 gap-2 max-h-64 overflow-y-auto">
-                    {snapshots.slice(-12).reverse().map((snap) => (
+                  <div className="grid grid-cols-4 gap-2 max-h-96 overflow-y-auto pr-2">
+                    {[...snapshots].reverse().map((snap) => (
                       <div key={snap.timestamp} className="relative group">
                         <img
                           src={snap.url}

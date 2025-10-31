@@ -677,7 +677,15 @@ app.get('/api/session/:sessionId', (req, res) => {
 });
 
 app.post('/api/generate-timelapse', (req, res) => {
-  const { sessionId, fps, format = 'mp4' } = req.body;
+  const { 
+    sessionId, 
+    fps, 
+    format = 'mp4',
+    resolutionScale = 'original',
+    gifFps = 10,
+    gifColors = 256,
+    gifDither = 'floyd_steinberg'
+  } = req.body;
   const session = db.getSession(sessionId);
   const snapshots = db.getSnapshots(sessionId);
 
@@ -697,9 +705,13 @@ app.post('/api/generate-timelapse', (req, res) => {
   }
 
   const extension = format === 'gif' ? 'gif' : 'mp4';
-  const outputFile = path.join(videosDir, `timelapse-${sessionId}.${extension}`);
+  // Generate unique filename to support multiple timelapses per session
+  const timestamp = Date.now();
+  const uniqueId = uuidv4().substring(0, 8);
+  const filename = `timelapse-${sessionId}-${timestamp}-${uniqueId}.${extension}`;
+  const outputFile = path.join(videosDir, filename);
   const sessionDir = path.join(snapshotsDir, sessionId);
-  const fileListPath = path.join(sessionDir, 'filelist.txt');
+  const fileListPath = path.join(sessionDir, `filelist-${timestamp}.txt`);
 
   const fileList = snapshots
     .map(s => `file '${path.join(__dirname, s.file_path.replace(/^\//, ''))}'`)
@@ -707,56 +719,211 @@ app.post('/api/generate-timelapse', (req, res) => {
 
   fs.writeFileSync(fileListPath, fileList);
 
+  // Build resolution scale filter
+  let scaleFilter = '';
+  if (resolutionScale !== 'original') {
+    const resolutions = {
+      '4k': '3840:2160',
+      '1080p': '1920:1080',
+      '720p': '1280:720',
+      '480p': '854:480',
+      '360p': '640:360'
+    };
+    if (resolutions[resolutionScale]) {
+      scaleFilter = `scale=${resolutions[resolutionScale]}:flags=lanczos`;
+    }
+  }
+
   const command = ffmpeg()
     .input(fileListPath)
     .inputOptions(['-hwaccel cuda', '-f concat', '-safe 0', '-r', fps.toString()]);
 
   if (format === 'gif') {
-    // GIF output options
-    command.outputOptions([
-      '-vf', 'fps=10,scale=640:-1:flags=lanczos', // Scale down for GIF size
-      '-gifflags', '+transdiff'  // Optimize GIF
-    ]);
+    // Build GIF filter chain
+    let gifFilters = [];
+    
+    // Apply resolution scaling if specified
+    if (scaleFilter) {
+      gifFilters.push(scaleFilter);
+    }
+    
+    // Apply FPS (gifFps is the output framerate)
+    gifFilters.push(`fps=${gifFps}`);
+    
+    let filterString = gifFilters.join(',');
+    
+    // If using custom color palette (colors < 256), use two-pass encoding
+    if (gifColors < 256) {
+      const paletteFile = path.join(sessionDir, 'palette.png');
+      
+      // First pass: generate palette
+      const paletteCommand = ffmpeg()
+        .input(fileListPath)
+        .inputOptions(['-hwaccel cuda', '-f concat', '-safe 0', '-r', fps.toString()])
+        .outputOptions([
+          '-vf', `${filterString ? filterString + ',' : ''}palettegen=max_colors=${gifColors}`,
+          '-y'
+        ])
+        .output(paletteFile);
+      
+      paletteCommand.on('end', () => {
+        // Second pass: use palette with dithering
+        // Create new command for second pass with both inputs
+        const finalCommand = ffmpeg()
+          .input(fileListPath)
+          .inputOptions(['-hwaccel cuda', '-f concat', '-safe 0', '-r', fps.toString()])
+          .input(paletteFile);
+        
+        // Build complex filter: apply scaling/fps to video, then apply palette
+        let complexFilter = '';
+        if (filterString) {
+          complexFilter = `[0:v]${filterString}[scaled];[scaled][1:v]paletteuse=dither=${gifDither}[out]`;
+        } else {
+          complexFilter = `[0:v][1:v]paletteuse=dither=${gifDither}[out]`;
+        }
+        
+        finalCommand
+          .complexFilter(complexFilter)
+          .outputOptions([
+            '-map', '[out]',
+            '-gifflags', '+transdiff'
+          ]);
+        
+        finalCommand
+          .output(outputFile)
+          .on('end', () => {
+            // Cleanup
+            if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
+            if (fs.existsSync(paletteFile)) fs.unlinkSync(paletteFile);
+            
+            const videoUrl = `/videos/${filename}`;
+            
+            // Save video to database
+            try {
+              const stats = fs.statSync(outputFile);
+              db.addVideo(sessionId, videoUrl, parseInt(fps), format, {
+                file_size: stats.size
+              });
+            } catch (error) {
+              console.error('Error saving video to database:', error);
+            }
+            
+            broadcast({
+              type: 'timelapse-ready',
+              sessionId: sessionId,
+              videoUrl: videoUrl,
+              format: format,
+              videoId: filename
+            });
+            
+            res.json({ success: true, videoUrl: videoUrl, format: format, filename: filename });
+          })
+          .on('error', (err) => {
+            if (fs.existsSync(paletteFile)) fs.unlinkSync(paletteFile);
+            console.error('Error generating timelapse:', err);
+            res.status(500).json({ success: false, message: err.message });
+          })
+          .run();
+      });
+      
+      paletteCommand.on('error', (err) => {
+        console.error('Error generating palette:', err);
+        res.status(500).json({ success: false, message: err.message });
+      });
+      
+      paletteCommand.run();
+      return; // Early return, continuation happens in palette command's 'end' handler
+    } else {
+      // Standard GIF encoding (256 colors, no palette generation)
+      command.outputOptions([
+        '-vf', filterString || 'fps=10',
+        '-gifflags', '+transdiff'
+      ]);
+    }
   } else {
     // MP4 output options
-    command.outputOptions([
-      '-c:v h264_nvenc',     // Use Nvidia hardware encoder
-      '-pix_fmt yuv420p',
-      '-preset fast',         // Use fast preset for hardware encoding
-      '-cq 23'                // Use constant quality instead of CRF for NVENC
-    ]);
+    const mp4OutputOptions = [
+      '-c:v', 'h264_nvenc',
+      '-pix_fmt', 'yuv420p',
+      '-preset', 'fast',
+      '-cq', '23'
+    ];
+    
+    // Add scale filter if specified
+    if (scaleFilter) {
+      mp4OutputOptions.push('-vf', scaleFilter);
+    }
+    
+    command.outputOptions(mp4OutputOptions);
   }
 
-  command
-    .output(outputFile)
-    .on('end', () => {
-      if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
-      const videoUrl = `/videos/timelapse-${sessionId}.${extension}`;
+  // For GIF without palette generation, continue here
+  if (format === 'gif' && gifColors >= 256) {
+    command
+      .output(outputFile)
+      .on('end', () => {
+        if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
+        const videoUrl = `/videos/${filename}`;
 
-      // Save video to database
-      try {
-        const stats = fs.statSync(outputFile);
-        db.addVideo(sessionId, videoUrl, parseInt(fps), format, {
-          file_size: stats.size
+        // Save video to database
+        try {
+          const stats = fs.statSync(outputFile);
+          db.addVideo(sessionId, videoUrl, parseInt(fps), format, {
+            file_size: stats.size
+          });
+        } catch (error) {
+          console.error('Error saving video to database:', error);
+        }
+
+        broadcast({
+          type: 'timelapse-ready',
+          sessionId: sessionId,
+          videoUrl: videoUrl,
+          format: format,
+          videoId: filename
         });
-      } catch (error) {
-        console.error('Error saving video to database:', error);
-      }
 
-      broadcast({
-        type: 'timelapse-ready',
-        sessionId: sessionId,
-        videoUrl: videoUrl,
-        format: format
-      });
+        res.json({ success: true, videoUrl: videoUrl, format: format, filename: filename });
+      })
+      .on('error', (err) => {
+        console.error('Error generating timelapse:', err);
+        res.status(500).json({ success: false, message: err.message });
+      })
+      .run();
+  } else if (format === 'mp4') {
+    // MP4 encoding
+    command
+      .output(outputFile)
+      .on('end', () => {
+        if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
+        const videoUrl = `/videos/${filename}`;
 
-      res.json({ success: true, videoUrl: videoUrl, format: format });
-    })
-    .on('error', (err) => {
-      console.error('Error generating timelapse:', err);
-      res.status(500).json({ success: false, message: err.message });
-    })
-    .run();
+        // Save video to database
+        try {
+          const stats = fs.statSync(outputFile);
+          db.addVideo(sessionId, videoUrl, parseInt(fps), format, {
+            file_size: stats.size
+          });
+        } catch (error) {
+          console.error('Error saving video to database:', error);
+        }
+
+        broadcast({
+          type: 'timelapse-ready',
+          sessionId: sessionId,
+          videoUrl: videoUrl,
+          format: format,
+          videoId: filename
+        });
+
+        res.json({ success: true, videoUrl: videoUrl, format: format, filename: filename });
+      })
+      .on('error', (err) => {
+        console.error('Error generating timelapse:', err);
+        res.status(500).json({ success: false, message: err.message });
+      })
+      .run();
+  }
 });
 
 app.delete('/api/session/:sessionId', (req, res) => {
@@ -777,9 +944,17 @@ app.delete('/api/session/:sessionId', (req, res) => {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }
     
-    const videoFile = path.join(videosDir, `timelapse-${sessionId}.mp4`);
-    if (fs.existsSync(videoFile)) {
-      fs.unlinkSync(videoFile);
+    // Delete all video files for this session
+    const videos = db.getVideos(sessionId);
+    for (const video of videos) {
+      const videoPath = path.join(__dirname, video.file_path.replace(/^\//, ''));
+      if (fs.existsSync(videoPath)) {
+        try {
+          fs.unlinkSync(videoPath);
+        } catch (error) {
+          console.error(`Error deleting video file ${videoPath}:`, error);
+        }
+      }
     }
 
     // Delete from database (cascades to snapshots and videos)
@@ -800,6 +975,19 @@ app.get('/api/sessions', (req, res) => {
 app.get('/api/storage-stats', (req, res) => {
   const stats = db.getStorageStats();
   res.json({ success: true, stats });
+});
+
+// Get all videos for a session
+app.get('/api/session/:sessionId/videos', (req, res) => {
+  const { sessionId } = req.params;
+  const session = db.getSession(sessionId);
+  
+  if (!session) {
+    return res.status(404).json({ success: false, message: 'Session not found' });
+  }
+  
+  const videos = db.getVideos(sessionId);
+  res.json({ success: true, videos });
 });
 
 // Device enumeration endpoint
@@ -1497,10 +1685,18 @@ async function cleanupOldSessions() {
           console.log(`Deleted session directory: ${sessionDir}`);
         }
         
-        const videoFile = path.join(videosDir, `timelapse-${session.id}.mp4`);
-        if (fs.existsSync(videoFile)) {
-          fs.unlinkSync(videoFile);
-          console.log(`Deleted video file: ${videoFile}`);
+        // Delete all video files for this session
+        const videos = db.getVideos(session.id);
+        for (const video of videos) {
+          const videoPath = path.join(__dirname, video.file_path.replace(/^\//, ''));
+          if (fs.existsSync(videoPath)) {
+            try {
+              fs.unlinkSync(videoPath);
+              console.log(`Deleted video file: ${videoPath}`);
+            } catch (error) {
+              console.error(`Error deleting video file ${videoPath}:`, error);
+            }
+          }
         }
         
         // Delete from database
@@ -1680,28 +1876,46 @@ function checkQuotaBeforeCapture(sessionId) {
   return { success: true };
 }
 
-// Video download endpoint with forced download headers
+// Video download endpoint - supports both sessionId (legacy) and filename
 app.get('/api/download/video/:sessionId', (req, res) => {
   const { sessionId } = req.params;
+  const { filename } = req.query; // Optional filename parameter
 
-  // Check for both MP4 and GIF files
-  let videoPath = path.join(videosDir, `timelapse-${sessionId}.mp4`);
-  let format = 'mp4';
+  let videoPath;
+  let downloadFilename;
 
-  if (!fs.existsSync(videoPath)) {
-    videoPath = path.join(videosDir, `timelapse-${sessionId}.gif`);
-    format = 'gif';
+  // If filename is provided, use it (for multiple timelapses per session)
+  if (filename) {
+    videoPath = path.join(videosDir, filename);
+    downloadFilename = filename;
+    
+    // Verify the file belongs to this session for security
+    if (!filename.startsWith(`timelapse-${sessionId}-`)) {
+      return res.status(403).json({ success: false, message: 'Video does not belong to this session' });
+    }
+  } else {
+    // Legacy behavior: find first video for session
+    const videos = db.getVideos(sessionId);
+    if (videos.length === 0) {
+      return res.status(404).json({ success: false, message: 'No videos found for this session' });
+    }
+    
+    // Use the most recent video
+    const video = videos[0]; // Already ordered by created_at DESC
+    const filePath = video.file_path.replace(/^\//, ''); // Remove leading slash
+    videoPath = path.join(__dirname, filePath);
+    downloadFilename = path.basename(video.file_path);
   }
 
   if (!fs.existsSync(videoPath)) {
-    return res.status(404).json({ success: false, message: 'Video not found' });
+    return res.status(404).json({ success: false, message: 'Video file not found' });
   }
 
-  const filename = `timelapse-${sessionId}.${format}`;
+  const format = path.extname(downloadFilename).substring(1);
   const contentType = format === 'gif' ? 'image/gif' : 'video/mp4';
 
   // Set headers to force download
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${downloadFilename}"`);
   res.setHeader('Content-Type', contentType);
 
   // Stream the file
