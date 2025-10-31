@@ -40,6 +40,13 @@ const MAX_CONSECUTIVE_FAILURES = 10; // Stop only after 10 consecutive failures
 // MQTT client management
 const mqttClients = new Map();
 
+// MQTT topic discovery service
+let topicDiscoveryClient = null;
+let discoveredTopics = new Set();
+let topicTree = {}; // Tree structure for hierarchical topics
+let topicDiscoveryInterval = null;
+const TOPIC_REFRESH_INTERVAL = 7 * 60 * 1000; // 7 minutes
+
 // Unified capture function for all source types
 async function captureFromSource(sessionId, sourceConfig) {
   const session = db.getSession(sessionId);
@@ -1706,6 +1713,281 @@ app.get('/api/mqtt-status/:sessionId', (req, res) => {
   } else {
     res.status(404).json({ success: false, message: 'MQTT session not found' });
   }
+});
+
+// Helper function to build topic tree structure
+function buildTopicTree(topics) {
+  const tree = {};
+  
+  topics.forEach(topic => {
+    const parts = topic.split('/');
+    let current = tree;
+    
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!current[part]) {
+        current[part] = {};
+      }
+      current = current[part];
+    }
+    // Mark as leaf (complete topic)
+    current._isTopic = true;
+    current._fullPath = topic;
+  });
+  
+  return tree;
+}
+
+// Helper function to flatten topic tree to array
+function flattenTopicTree(tree, prefix = '') {
+  const topics = [];
+  
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === '_isTopic' || key === '_fullPath') continue;
+    
+    const currentPath = prefix ? `${prefix}/${key}` : key;
+    
+    // If this is a leaf topic, add it
+    if (value._isTopic && value._fullPath) {
+      topics.push(value._fullPath);
+    }
+    
+    // Recursively add children
+    const childTopics = flattenTopicTree(value, currentPath);
+    topics.push(...childTopics);
+  }
+  
+  return topics;
+}
+
+// Start MQTT topic discovery
+function startTopicDiscovery(brokerUrl, port, username, password) {
+  // Stop existing discovery if running
+  if (topicDiscoveryClient) {
+    topicDiscoveryClient.end();
+    topicDiscoveryClient = null;
+  }
+  
+  // Clear existing topics
+  discoveredTopics.clear();
+  topicTree = {};
+  
+  if (!brokerUrl) {
+    console.log('No MQTT broker URL provided for topic discovery');
+    return;
+  }
+  
+  // Ensure broker URL has protocol prefix
+  let normalizedBrokerUrl = brokerUrl.trim();
+  if (!normalizedBrokerUrl.startsWith('mqtt://') && 
+      !normalizedBrokerUrl.startsWith('mqtts://') && 
+      !normalizedBrokerUrl.startsWith('ws://') && 
+      !normalizedBrokerUrl.startsWith('wss://')) {
+    // Default to mqtt:// if no protocol specified
+    normalizedBrokerUrl = `mqtt://${normalizedBrokerUrl}`;
+  }
+  
+  // Extract port from URL if it's included (e.g., mqtt://broker:1883)
+  // and use it if port parameter is not provided
+  const urlMatch = normalizedBrokerUrl.match(/^(\w+:\/\/[^:]+):(\d+)(\/.*)?$/);
+  if (urlMatch && urlMatch[2] && !port) {
+    port = urlMatch[2];
+    // Remove port from URL since we'll pass it as option
+    normalizedBrokerUrl = normalizedBrokerUrl.replace(/:\d+/, '');
+  }
+  
+  console.log(`Starting MQTT topic discovery for broker: ${normalizedBrokerUrl}`);
+  
+  const mqttOptions = {
+    username: username || undefined,
+    password: password || undefined,
+    keepalive: 60,
+    reconnectPeriod: 5000,
+    connectTimeout: 30 * 1000,
+    clientId: `timelapse-discovery-${Date.now()}`
+  };
+  
+  if (port) {
+    mqttOptions.port = parseInt(port);
+  }
+  
+  topicDiscoveryClient = mqtt.connect(normalizedBrokerUrl, mqttOptions);
+  
+  topicDiscoveryClient.on('connect', () => {
+    console.log('Topic discovery client connected');
+    
+    // Subscribe to wildcard to discover topics from messages
+    // Note: This will receive all messages, so we track topics from message topics
+    topicDiscoveryClient.subscribe('#', { qos: 0 }, (err) => {
+      if (err) {
+        console.error('Failed to subscribe to # for topic discovery:', err);
+      } else {
+        console.log('Subscribed to # for topic discovery');
+      }
+    });
+    
+    // Rebuild tree after a delay to collect initial topics
+    setTimeout(() => {
+      if (discoveredTopics.size > 0) {
+        topicTree = buildTopicTree(Array.from(discoveredTopics));
+      }
+    }, 5000);
+  });
+  
+  topicDiscoveryClient.on('message', (receivedTopic, message) => {
+    // Track the topic (exclude most $SYS topics but allow broker info)
+    if (receivedTopic && !receivedTopic.startsWith('$SYS')) {
+      discoveredTopics.add(receivedTopic);
+      
+      // Rebuild topic tree periodically (not on every message to avoid overhead)
+      if (discoveredTopics.size % 10 === 0 || discoveredTopics.size <= 50) {
+        topicTree = buildTopicTree(Array.from(discoveredTopics));
+      }
+    }
+  });
+  
+  // Rebuild tree periodically to ensure it's up to date
+  const treeRebuildInterval = setInterval(() => {
+    if (discoveredTopics.size > 0) {
+      topicTree = buildTopicTree(Array.from(discoveredTopics));
+    }
+  }, 30000); // Rebuild every 30 seconds
+  
+  topicDiscoveryClient.on('error', (err) => {
+    console.error('Topic discovery client error:', err);
+  });
+  
+  topicDiscoveryClient.on('close', () => {
+    console.log('Topic discovery client disconnected');
+  });
+}
+
+// Stop topic discovery
+function stopTopicDiscovery() {
+  if (topicDiscoveryClient) {
+    topicDiscoveryClient.end();
+    topicDiscoveryClient = null;
+  }
+  if (topicDiscoveryInterval) {
+    clearInterval(topicDiscoveryInterval);
+    topicDiscoveryInterval = null;
+  }
+}
+
+// Auto-start topic discovery on server startup if env vars are available
+if (process.env.MQTT_BROKER_URL) {
+  let brokerUrl = process.env.MQTT_BROKER_URL.trim();
+  let port = process.env.MQTT_PORT;
+  
+  // Extract port from URL if needed and port not explicitly set
+  if (!port) {
+    // Check if URL has protocol and port (e.g., mqtt://broker:1883)
+    const urlWithProtocolMatch = brokerUrl.match(/^\w+:\/\/([^:]+):(\d+)(\/.*)?$/);
+    if (urlWithProtocolMatch && urlWithProtocolMatch[2]) {
+      port = urlWithProtocolMatch[2];
+      // Remove port from URL since we'll pass it separately
+      brokerUrl = brokerUrl.replace(/:\d+/, '');
+    } else {
+      // Check if URL is just host:port without protocol
+      const urlMatch = brokerUrl.match(/^([^:]+):(\d+)$/);
+      if (urlMatch && urlMatch[2]) {
+        port = urlMatch[2];
+        brokerUrl = urlMatch[1]; // Extract just the host part
+      }
+    }
+  }
+  
+  // Wait a bit for server to fully start, then start discovery
+  setTimeout(() => {
+    startTopicDiscovery(
+      brokerUrl,
+      port,
+      process.env.MQTT_USERNAME,
+      process.env.MQTT_PASSWORD
+    );
+    
+    // Set up periodic refresh
+    topicDiscoveryInterval = setInterval(() => {
+      console.log('Refreshing MQTT topic discovery...');
+      startTopicDiscovery(
+        brokerUrl,
+        port,
+        process.env.MQTT_USERNAME,
+        process.env.MQTT_PASSWORD
+      );
+    }, TOPIC_REFRESH_INTERVAL);
+  }, 5000); // 5 second delay after server start
+}
+
+// Get discovered MQTT topics
+app.get('/api/mqtt-topics', (req, res) => {
+  const topics = Array.from(discoveredTopics).sort();
+  res.json({
+    success: true,
+    topics: topics,
+    topicTree: topicTree,
+    count: topics.length
+  });
+});
+
+// Manually trigger topic discovery refresh
+app.post('/api/mqtt-topics/refresh', (req, res) => {
+  const { brokerUrl, port, username, password } = req.body;
+  
+  if (!brokerUrl) {
+    return res.status(400).json({ success: false, message: 'Broker URL is required' });
+  }
+  
+  startTopicDiscovery(brokerUrl, port, username, password);
+  
+  res.json({
+    success: true,
+    message: 'Topic discovery started'
+  });
+});
+
+// Get MQTT configuration from environment variables
+app.get('/api/mqtt-config', (req, res) => {
+  const config = {};
+  
+  // Only include values that are actually set (non-empty)
+  if (process.env.MQTT_BROKER_URL) {
+    let brokerUrl = process.env.MQTT_BROKER_URL.trim();
+    
+    // Try to parse URL if it includes a port (e.g., mqtt://broker.com:1883 or broker.com:1883)
+    // Only extract port if MQTT_PORT is not explicitly set
+    if (!process.env.MQTT_PORT) {
+      // Match URLs with port: protocol://host:port or host:port
+      const urlMatch = brokerUrl.match(/^(.*):(\d+)$/);
+      if (urlMatch && urlMatch[1] && urlMatch[2]) {
+        // Port found in URL, extract it
+        config.brokerUrl = urlMatch[1]; // Remove port from URL
+        config.port = urlMatch[2]; // Extract port
+      } else {
+        // No port in URL
+        config.brokerUrl = brokerUrl;
+      }
+    } else {
+      // MQTT_PORT is explicitly set, use it and keep full URL
+      config.brokerUrl = brokerUrl;
+      config.port = process.env.MQTT_PORT;
+    }
+  } else if (process.env.MQTT_PORT) {
+    // Only port is set without URL (unlikely but handle it)
+    config.port = process.env.MQTT_PORT;
+  }
+  
+  if (process.env.MQTT_USERNAME) {
+    config.username = process.env.MQTT_USERNAME;
+  }
+  if (process.env.MQTT_PASSWORD) {
+    config.password = process.env.MQTT_PASSWORD;
+  }
+  
+  res.json({
+    success: true,
+    config: config
+  });
 });
 
 // MQTT snapshot capture function (now uses unified capture)

@@ -25,7 +25,11 @@ services:
       - DISPLAY=:0  # For screen capture
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-      - IMPORT_PARENT_PATH=/mnt/photo_import
+      - IMPORT_PARENT_PATH=${IMPORT_PARENT_PATH:-/mnt/photo_import}
+      - MQTT_BROKER_URL=${MQTT_BROKER_URL:-}
+      - MQTT_PORT=${MQTT_PORT:-}
+      - MQTT_USERNAME=${MQTT_USERNAME:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
     # NEW: Privileged mode for device access
     privileged: true
     restart: unless-stopped
@@ -45,8 +49,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=http://localhost:3001
-        - REACT_APP_WS_URL=ws://localhost:3002
+        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:3001}
+        - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:3002}
     ports:
       - "3000:80"
     depends_on:

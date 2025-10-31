@@ -56,6 +56,10 @@ function App() {
   const [mqttTesting, setMqttTesting] = useState(false);
   const [mqttConnectionStatus, setMqttConnectionStatus] = useState(null);
   const [testingMqttConnection, setTestingMqttConnection] = useState(false);
+  const [mqttAvailableTopics, setMqttAvailableTopics] = useState([]);
+  const [mqttTopicTree, setMqttTopicTree] = useState({});
+  const [mqttTopicDropdownOpen, setMqttTopicDropdownOpen] = useState(false);
+  const [mqttTopicFilter, setMqttTopicFilter] = useState('');
 
   // NEW: Universal source states
   const [usbDevicePath, setUsbDevicePath] = useState('/dev/video0');
@@ -840,6 +844,83 @@ function App() {
       loadAvailableDevices();
     }
   }, [activeTab, selectedSource]);
+
+  // Load MQTT topics from backend
+  const loadMqttTopics = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/mqtt-topics`);
+      const data = await res.json();
+      if (data.success) {
+        setMqttAvailableTopics(data.topics || []);
+        setMqttTopicTree(data.topicTree || {});
+      }
+    } catch (err) {
+      console.error('Failed to load MQTT topics:', err);
+    }
+  };
+
+  // Load MQTT configuration from environment variables when MQTT tab is accessed
+  useEffect(() => {
+    if (selectedTrigger === 'mqtt' || activeTab === 'mqtt') {
+      fetch(`${API_URL}/api/mqtt-config`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.config) {
+            // Only populate fields that are empty (or default for port) and have config values
+            if (data.config.brokerUrl && !mqttBrokerUrl) {
+              setMqttBrokerUrl(data.config.brokerUrl);
+            }
+            // For port, populate if it's still the default value (1883) or empty
+            if (data.config.port && (mqttPort === 1883 || !mqttPort)) {
+              setMqttPort(parseInt(data.config.port) || 1883);
+            }
+            if (data.config.username && !mqttUsername) {
+              setMqttUsername(data.config.username);
+            }
+            if (data.config.password && !mqttPassword) {
+              setMqttPassword(data.config.password);
+            }
+          }
+        })
+        .catch(err => {
+          console.error('Failed to load MQTT config:', err);
+        });
+      
+      // Load available topics
+      loadMqttTopics();
+      
+      // Set up periodic refresh of topics (every 8 minutes)
+      const topicRefreshInterval = setInterval(() => {
+        loadMqttTopics();
+      }, 8 * 60 * 1000);
+      
+      return () => clearInterval(topicRefreshInterval);
+    }
+  }, [selectedTrigger, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh topics when broker URL changes
+  useEffect(() => {
+    if (mqttBrokerUrl && (selectedTrigger === 'mqtt' || activeTab === 'mqtt')) {
+      // Trigger topic refresh with current broker credentials
+      fetch(`${API_URL}/api/mqtt-topics/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brokerUrl: mqttBrokerUrl,
+          port: mqttPort,
+          username: mqttUsername || undefined,
+          password: mqttPassword || undefined
+        })
+      }).catch(err => {
+        console.error('Failed to refresh topics:', err);
+      });
+      
+      // Load topics after a short delay to allow discovery
+      setTimeout(() => {
+        loadMqttTopics();
+      }, 2000);
+    }
+  }, [mqttBrokerUrl, mqttPort]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load available devices
   const loadAvailableDevices = async () => {
@@ -2416,17 +2497,186 @@ function App() {
                   </div>
                 </div>
 
-                <div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-100 mb-2">
+                      Username (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={mqttUsername}
+                      onChange={(e) => setMqttUsername(e.target.value)}
+                      placeholder="mqtt_user"
+                      className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-100 mb-2">
+                      Password (optional)
+                    </label>
+                    <input
+                      type="password"
+                      value={mqttPassword}
+                      onChange={(e) => setMqttPassword(e.target.value)}
+                      placeholder="password"
+                      className="w-full px-4 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="relative">
                   <label className="block text-sm font-medium text-white mb-2">
-                    Topic
+                    Topic {mqttAvailableTopics.length > 0 && `(${mqttAvailableTopics.length} discovered)`}
                   </label>
-                  <input
-                    type="text"
-                    value={mqttTopic}
-                    onChange={(e) => setMqttTopic(e.target.value)}
-                    placeholder="sensor/trigger"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={mqttTopic}
+                      onChange={(e) => {
+                        setMqttTopic(e.target.value);
+                        setMqttTopicFilter(e.target.value);
+                        setMqttTopicDropdownOpen(true);
+                      }}
+                      onFocus={() => setMqttTopicDropdownOpen(true)}
+                      onBlur={() => setTimeout(() => setMqttTopicDropdownOpen(false), 200)}
+                      placeholder="sensor/trigger or select from discovered topics"
+                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    {mqttAvailableTopics.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMqttTopicDropdownOpen(!mqttTopicDropdownOpen);
+                          setMqttTopicFilter('');
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                      >
+                        <ChevronDown className={`w-5 h-5 transition-transform ${mqttTopicDropdownOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Topic dropdown with tree view */}
+                  {mqttTopicDropdownOpen && mqttAvailableTopics.length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 max-h-96 overflow-y-auto bg-gray-800 border border-white/20 rounded-lg shadow-lg">
+                      {/* Filter input */}
+                      <div className="p-2 border-b border-white/10">
+                        <input
+                          type="text"
+                          value={mqttTopicFilter}
+                          onChange={(e) => setMqttTopicFilter(e.target.value)}
+                          placeholder="Filter topics..."
+                          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      
+                      {/* Topic list */}
+                      <div className="p-2">
+                        {(() => {
+                          const filteredTopics = mqttAvailableTopics.filter(topic =>
+                            !mqttTopicFilter || topic.toLowerCase().includes(mqttTopicFilter.toLowerCase())
+                          );
+                          
+                          if (filteredTopics.length === 0) {
+                            return (
+                              <div className="px-3 py-2 text-gray-400 text-sm">
+                                No topics found matching "{mqttTopicFilter}"
+                              </div>
+                            );
+                          }
+                          
+                          // Build a hierarchical display
+                          const topicMap = {};
+                          filteredTopics.forEach(topic => {
+                            const parts = topic.split('/');
+                            let current = topicMap;
+                            
+                            parts.forEach((part, idx) => {
+                              const isLast = idx === parts.length - 1;
+                              
+                              if (!current[part]) {
+                                current[part] = { 
+                                  _children: {}, 
+                                  _fullPath: isLast ? topic : null,
+                                  _isLeaf: isLast
+                                };
+                              } else if (isLast) {
+                                // This is the final part, mark it as a complete topic
+                                current[part]._fullPath = topic;
+                                current[part]._isLeaf = true;
+                              }
+                              
+                              if (!isLast) {
+                                current = current[part]._children;
+                              }
+                            });
+                          });
+                          
+                          const renderTopicTree = (map, prefix = '', depth = 0) => {
+                            const entries = Object.entries(map).sort(([a], [b]) => {
+                              // Sort: topics with children first, then leaf topics
+                              const aHasChildren = Object.keys(map[a]._children || {}).length > 0;
+                              const bHasChildren = Object.keys(map[b]._children || {}).length > 0;
+                              if (aHasChildren && !bHasChildren) return -1;
+                              if (!aHasChildren && bHasChildren) return 1;
+                              return a.localeCompare(b);
+                            });
+                            
+                            return entries.map(([key, value]) => {
+                              const fullPath = prefix ? `${prefix}/${key}` : key;
+                              const isLeaf = value._isLeaf && value._fullPath !== null;
+                              const hasChildren = Object.keys(value._children || {}).length > 0;
+                              
+                              return (
+                                <div key={fullPath}>
+                                  <div className="flex items-center" style={{ paddingLeft: `${depth * 16}px` }}>
+                                    {hasChildren ? (
+                                      <span className="text-gray-400 text-sm font-medium py-1 px-2">
+                                        {key}/
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMqttTopic(value._fullPath || fullPath);
+                                          setMqttTopicDropdownOpen(false);
+                                          setMqttTopicFilter('');
+                                        }}
+                                        className="w-full text-left px-3 py-2 hover:bg-purple-600/20 rounded text-white text-sm flex items-center gap-2"
+                                      >
+                                        <span className="truncate">{value._fullPath || fullPath}</span>
+                                      </button>
+                                    )}
+                                    {isLeaf && hasChildren && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMqttTopic(value._fullPath);
+                                          setMqttTopicDropdownOpen(false);
+                                          setMqttTopicFilter('');
+                                        }}
+                                        className="ml-2 px-2 py-1 text-xs bg-purple-600/30 hover:bg-purple-600/50 rounded text-white"
+                                      >
+                                        Use
+                                      </button>
+                                    )}
+                                  </div>
+                                  {hasChildren && (
+                                    <div>
+                                      {renderTopicTree(value._children, fullPath, depth + 1)}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            });
+                          };
+                          
+                          return renderTopicTree(topicMap);
+                        })()}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
 
@@ -2554,33 +2804,6 @@ function App() {
                     {mqttConnectionStatus === 'error' && <XCircle className="w-5 h-5 text-red-400" />}
                   </button>
                 )}
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      Username (optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={mqttUsername}
-                      onChange={(e) => setMqttUsername(e.target.value)}
-                      placeholder="mqtt_user"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      Password (optional)
-                    </label>
-                    <input
-                      type="password"
-                      value={mqttPassword}
-                      onChange={(e) => setMqttPassword(e.target.value)}
-                      placeholder="password"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                </div>
 
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
                   <h3 className="text-blue-300 font-semibold mb-2">How it works:</h3>
