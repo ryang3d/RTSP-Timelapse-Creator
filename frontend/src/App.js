@@ -84,6 +84,14 @@ function App() {
   const [availableDevices, setAvailableDevices] = useState(null);
   const [loadingDevices, setLoadingDevices] = useState(false);
 
+  // Frigate camera states
+  const [frigateCameras, setFrigateCameras] = useState([]);
+  const [loadingFrigateCameras, setLoadingFrigateCameras] = useState(false);
+  const [frigateApiUrl, setFrigateApiUrl] = useState('');
+  const [frigateError, setFrigateError] = useState(null);
+  const [selectedFrigateCamera, setSelectedFrigateCamera] = useState('');
+  const [frigateExpanded, setFrigateExpanded] = useState(false);
+
   // MQTT source selection
   const [mqttHttpUrl, setMqttHttpUrl] = useState('');
   const [mqttRtmpUrl, setMqttRtmpUrl] = useState('');
@@ -936,6 +944,41 @@ function App() {
       console.error('Error loading devices:', error);
     } finally {
       setLoadingDevices(false);
+    }
+  };
+
+  // Load Frigate cameras
+  const fetchFrigateCameras = async () => {
+    setLoadingFrigateCameras(true);
+    setFrigateError(null);
+    try {
+      const apiUrlParam = frigateApiUrl ? `?apiUrl=${encodeURIComponent(frigateApiUrl)}` : '';
+      const response = await fetch(`${API_URL}/api/frigate/cameras${apiUrlParam}`);
+      const data = await response.json();
+
+      if (data.success) {
+        setFrigateCameras(data.cameras || []);
+        if (!data.cameras || data.cameras.length === 0) {
+          setFrigateError('No cameras found in Frigate configuration');
+        }
+      } else {
+        setFrigateError(data.message || 'Failed to fetch cameras from Frigate');
+      }
+    } catch (error) {
+      console.error('Error fetching Frigate cameras:', error);
+      setFrigateError(`Failed to connect to Frigate: ${error.message}`);
+    } finally {
+      setLoadingFrigateCameras(false);
+    }
+  };
+
+  // Handle Frigate camera selection
+  const handleFrigateCameraSelect = (cameraName) => {
+    setSelectedFrigateCamera(cameraName);
+    const camera = frigateCameras.find(c => c.name === cameraName);
+    if (camera && camera.rtspUrl) {
+      setUrl(camera.rtspUrl);
+      setConnectionStatus(null); // Reset connection status
     }
   };
 
@@ -1861,6 +1904,95 @@ function App() {
               </h2>
 
             <div className="space-y-4">
+              {/* Frigate Camera Integration - Collapsible */}
+              <button
+                type="button"
+                onClick={() => setFrigateExpanded(!frigateExpanded)}
+                className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Camera className="w-4 h-4 text-purple-400" />
+                  <span className="text-sm font-medium">Load from Frigate</span>
+                  {frigateCameras.length > 0 && (
+                    <span className="text-xs text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded">
+                      {frigateCameras.length} camera{frigateCameras.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+                <ChevronDown className={`w-4 h-4 transition-transform ${frigateExpanded ? 'transform rotate-180' : ''}`} />
+              </button>
+
+              {frigateExpanded && (
+                <div className="bg-slate-700/30 rounded-lg p-4 border border-slate-600 space-y-3">
+                  {/* Optional API URL input */}
+                  <div>
+                    <input
+                      type="text"
+                      value={frigateApiUrl}
+                      onChange={(e) => setFrigateApiUrl(e.target.value)}
+                      placeholder="Frigate API URL (optional - uses default if empty)"
+                      className="w-full px-3 py-2 text-sm bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Leave empty to use default Frigate API URL from environment
+                    </p>
+                  </div>
+
+                  {/* Load from Frigate button */}
+                  <button
+                    onClick={fetchFrigateCameras}
+                    disabled={loadingFrigateCameras}
+                    className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg flex items-center justify-center gap-2 transition-colors text-sm"
+                  >
+                    {loadingFrigateCameras ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <Database className="w-4 h-4" />
+                        Load Cameras from Frigate
+                      </>
+                    )}
+                  </button>
+
+                  {/* Error message */}
+                  {frigateError && (
+                    <div className="p-2 bg-red-500/20 border border-red-500/50 rounded text-red-300 text-xs">
+                      {frigateError}
+                    </div>
+                  )}
+
+                  {/* Camera dropdown */}
+                  {frigateCameras.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Select Frigate Camera
+                      </label>
+                      <select
+                        value={selectedFrigateCamera}
+                        onChange={(e) => handleFrigateCameraSelect(e.target.value)}
+                        className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      >
+                        <option value="">-- Select a camera --</option>
+                        {frigateCameras.map((camera) => (
+                          <option key={camera.name} value={camera.name}>
+                            {camera.name}
+                            {camera.enabled ? ' [Enabled]' : ' [Disabled]'}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedFrigateCamera && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          Camera selected: {selectedFrigateCamera}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-white mb-2">
                   RTSP URL (include credentials in URL if needed)
