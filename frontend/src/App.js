@@ -91,6 +91,10 @@ function App() {
   const [frigateError, setFrigateError] = useState(null);
   const [selectedFrigateCamera, setSelectedFrigateCamera] = useState('');
   const [frigateExpanded, setFrigateExpanded] = useState(false);
+  
+  // MQTT Frigate states (separate from timed trigger)
+  const [mqttFrigateExpanded, setMqttFrigateExpanded] = useState(false);
+  const [selectedMqttFrigateCamera, setSelectedMqttFrigateCamera] = useState('');
 
   // MQTT source selection
   const [mqttHttpUrl, setMqttHttpUrl] = useState('');
@@ -972,13 +976,24 @@ function App() {
     }
   };
 
-  // Handle Frigate camera selection
+  // Handle Frigate camera selection (for timed trigger)
   const handleFrigateCameraSelect = (cameraName) => {
     setSelectedFrigateCamera(cameraName);
     const camera = frigateCameras.find(c => c.name === cameraName);
     if (camera && camera.rtspUrl) {
       setUrl(camera.rtspUrl);
       setConnectionStatus(null); // Reset connection status
+    }
+  };
+
+  // Handle Frigate camera selection (for MQTT trigger)
+  const handleMqttFrigateCameraSelect = (cameraName) => {
+    setSelectedMqttFrigateCamera(cameraName);
+    const camera = frigateCameras.find(c => c.name === cameraName);
+    if (camera && camera.rtspUrl) {
+      setMqttRtspUrl(camera.rtspUrl);
+      setMqttUseSharedUrl(false); // Don't use shared URL when selecting from Frigate
+      setMqttConnectionStatus(null); // Reset connection status
     }
   };
 
@@ -2814,27 +2829,118 @@ function App() {
 
                 {/* Dynamic source configuration based on selected type */}
                 {selectedSource === 'rtsp' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
+                  <div className="space-y-4">
+                    {/* Frigate Camera Integration - Collapsible for MQTT */}
+                    <button
+                      type="button"
+                      onClick={() => setMqttFrigateExpanded(!mqttFrigateExpanded)}
+                      className="w-full flex items-center justify-between px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white hover:bg-white/10 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Camera className="w-4 h-4 text-purple-400" />
+                        <span className="text-sm font-medium">Load from Frigate</span>
+                        {frigateCameras.length > 0 && (
+                          <span className="text-xs text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded">
+                            {frigateCameras.length} camera{frigateCameras.length !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                      <ChevronDown className={`w-4 h-4 transition-transform ${mqttFrigateExpanded ? 'transform rotate-180' : ''}`} />
+                    </button>
+
+                    {mqttFrigateExpanded && (
+                      <div className="bg-slate-700/30 rounded-lg p-4 border border-slate-600 space-y-3">
+                        {/* Optional API URL input */}
+                        <div>
+                          <input
+                            type="text"
+                            value={frigateApiUrl}
+                            onChange={(e) => setFrigateApiUrl(e.target.value)}
+                            placeholder="Frigate API URL (optional - uses default if empty)"
+                            className="w-full px-3 py-2 text-sm bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                          <p className="text-xs text-gray-400 mt-1">
+                            Leave empty to use default Frigate API URL from environment
+                          </p>
+                        </div>
+
+                        {/* Load from Frigate button */}
+                        <button
+                          onClick={fetchFrigateCameras}
+                          disabled={loadingFrigateCameras}
+                          className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg flex items-center justify-center gap-2 transition-colors text-sm"
+                        >
+                          {loadingFrigateCameras ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                              Loading...
+                            </>
+                          ) : (
+                            <>
+                              <Database className="w-4 h-4" />
+                              Load Cameras from Frigate
+                            </>
+                          )}
+                        </button>
+
+                        {/* Error message */}
+                        {frigateError && (
+                          <div className="p-2 bg-red-500/20 border border-red-500/50 rounded text-red-300 text-xs">
+                            {frigateError}
+                          </div>
+                        )}
+
+                        {/* Camera dropdown */}
+                        {frigateCameras.length > 0 && (
+                          <div>
+                            <label className="block text-sm font-medium text-white mb-2">
+                              Select Frigate Camera
+                            </label>
+                            <select
+                              value={selectedMqttFrigateCamera}
+                              onChange={(e) => handleMqttFrigateCameraSelect(e.target.value)}
+                              className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              <option value="">-- Select a camera --</option>
+                              {frigateCameras.map((camera) => (
+                                <option key={camera.name} value={camera.name}>
+                                  {camera.name}
+                                  {camera.enabled ? ' [Enabled]' : ' [Disabled]'}
+                                </option>
+                              ))}
+                            </select>
+                            {selectedMqttFrigateCamera && (
+                              <p className="text-xs text-gray-400 mt-1">
+                                Camera selected: {selectedMqttFrigateCamera}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <input
+                          type="checkbox"
+                          checked={mqttUseSharedUrl}
+                          onChange={(e) => setMqttUseSharedUrl(e.target.checked)}
+                          className="w-4 h-4 rounded"
+                        />
+                        <label className="text-sm font-medium text-white">Use RTSP URL from Stream tab</label>
+                      </div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        RTSP Stream URL
+                      </label>
                       <input
-                        type="checkbox"
-                        checked={mqttUseSharedUrl}
-                        onChange={(e) => setMqttUseSharedUrl(e.target.checked)}
-                        className="w-4 h-4 rounded"
+                        type="text"
+                        value={mqttUseSharedUrl ? url : mqttRtspUrl}
+                        onChange={(e) => setMqttRtspUrl(e.target.value)}
+                        disabled={mqttUseSharedUrl}
+                        placeholder="rtsp://username:password@camera.example.com:554/stream"
+                        className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
-                      <label className="text-sm font-medium text-white">Use RTSP URL from Stream tab</label>
                     </div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      RTSP Stream URL
-                    </label>
-                    <input
-                      type="text"
-                      value={mqttUseSharedUrl ? url : mqttRtspUrl}
-                      onChange={(e) => setMqttRtspUrl(e.target.value)}
-                      disabled={mqttUseSharedUrl}
-                      placeholder="rtsp://username:password@camera.example.com:554/stream"
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
                   </div>
                 )}
 
