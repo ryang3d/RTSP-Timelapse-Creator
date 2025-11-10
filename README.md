@@ -59,7 +59,7 @@ Transform camera streams, uploaded photos, and MQTT-triggered captures into time
 
 3. **Start the application:**
    ```bash
-   docker-compose up -d --build
+   docker compose up -d --build
    ```
 
 4. **Access the web interface:**
@@ -156,22 +156,22 @@ The application provides multiple ways to create timelapses:
 
 Test manually:
 ```bash
-docker-compose exec backend ffmpeg -rtsp_transport tcp -i "rtsp://your-url" -frames:v 1 test.jpg
+docker compose exec backend ffmpeg -rtsp_transport tcp -i "rtsp://your-url" -frames:v 1 test.jpg
 ```
 
 ### WebSocket Connection Issues
 
 - Check if port 3002 is accessible
 - Verify firewall settings
-- Ensure backend container is running: `docker-compose ps`
+- Ensure backend container is running: `docker compose ps`
 - Check browser console for errors
 
 ### Cannot Access from Other Devices
 
 Update the frontend build args in `docker-compose.yml` with your server's IP address instead of `localhost`, then rebuild:
 ```bash
-docker-compose down
-docker-compose up -d --build
+docker compose down
+docker compose up -d --build
 ```
 
 ### Out of Memory During Video Generation
@@ -191,19 +191,19 @@ docker-compose up -d --build
 
 ```bash
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # View backend logs only
-docker-compose logs -f backend
+docker compose logs -f backend
 
 # Restart services
-docker-compose restart
+docker compose restart
 
 # Stop services
-docker-compose down
+docker compose down
 
 # Rebuild and restart
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 ## Architecture
