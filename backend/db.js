@@ -251,15 +251,13 @@ class DatabaseManager {
   getStorageStats() {
     const stats = this.db.prepare(`
       SELECT 
-        COUNT(DISTINCT s.id) as total_sessions,
-        COUNT(snap.id) as total_snapshots,
-        COUNT(v.id) as total_videos,
-        COALESCE(SUM(snap.file_size), 0) as total_snapshot_size,
-        COALESCE(SUM(v.file_size), 0) as total_video_size,
-        COALESCE(SUM(snap.file_size) + SUM(v.file_size), 0) as total_size
-      FROM sessions s
-      LEFT JOIN snapshots snap ON s.id = snap.session_id
-      LEFT JOIN videos v ON s.id = v.session_id
+        (SELECT COUNT(*) FROM sessions) as total_sessions,
+        (SELECT COUNT(*) FROM snapshots) as total_snapshots,
+        (SELECT COUNT(*) FROM videos) as total_videos,
+        (SELECT COALESCE(SUM(file_size), 0) FROM snapshots) as total_snapshot_size,
+        (SELECT COALESCE(SUM(file_size), 0) FROM videos) as total_video_size,
+        (SELECT COALESCE(SUM(file_size), 0) FROM snapshots) + 
+        (SELECT COALESCE(SUM(file_size), 0) FROM videos) as total_size
     `).get();
     
     return stats;
@@ -324,13 +322,9 @@ class DatabaseManager {
     if (sessionId) {
       const sessionStats = this.db.prepare(`
         SELECT 
-          COALESCE(SUM(snap.file_size), 0) as session_snapshot_size,
-          COALESCE(SUM(v.file_size), 0) as session_video_size
-        FROM sessions s
-        LEFT JOIN snapshots snap ON s.id = snap.session_id
-        LEFT JOIN videos v ON s.id = v.session_id
-        WHERE s.id = ?
-      `).get(sessionId);
+          (SELECT COALESCE(SUM(file_size), 0) FROM snapshots WHERE session_id = ?) as session_snapshot_size,
+          (SELECT COALESCE(SUM(file_size), 0) FROM videos WHERE session_id = ?) as session_video_size
+      `).get(sessionId, sessionId);
       
       const sessionSize = (sessionStats.session_snapshot_size || 0) + (sessionStats.session_video_size || 0);
       
