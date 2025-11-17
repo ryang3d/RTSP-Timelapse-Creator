@@ -120,6 +120,37 @@ The application provides multiple ways to create timelapses:
 6. **Photos are captured** from your selected source when message changes from '1' to '0'
 7. **Perfect for motion sensors, door triggers, etc.**
 
+### 🎥 **Frigate Integration**
+The application integrates with [Frigate](https://frigate.video/) to automatically discover and use cameras configured in your Frigate instance.
+
+1. **Prerequisites:**
+   - Frigate must be running and accessible
+   - Configure the `frigate_default` external network in `docker-compose.yml` (see Advanced Configuration)
+   - Set `FRIGATE_API_URL` environment variable (defaults to `http://frigate:5000`)
+   - Optionally set `FRIGATE_RTSP_HOST` if Frigate RTSP streams use a different host
+
+2. **Using Frigate Cameras (Regular Capture):**
+   - In the RTSP Stream Capture tab, expand the "Load from Frigate" section
+   - Enter your Frigate API URL (or leave empty to use the default from environment)
+   - Click "Load Cameras from Frigate" to fetch available cameras
+   - Select a camera from the dropdown - the RTSP URL will be automatically populated
+   - Configure capture settings and start capturing as normal
+
+3. **Using Frigate Cameras (MQTT Trigger):**
+   - In the MQTT Trigger tab, expand the "Load from Frigate" section
+   - Load cameras as described above
+   - Select a Frigate camera - it will be used as the video source for MQTT-triggered captures
+   - Configure MQTT settings and start capture
+
+4. **API Endpoint:**
+   - `GET /api/frigate/cameras?apiUrl=<optional_url>` - Fetch cameras from Frigate API
+   - Returns list of cameras with names, RTSP URLs, and configuration details
+
+5. **RTSP URL Transformation:**
+   - If `FRIGATE_RTSP_HOST` is set, RTSP URLs from Frigate will be transformed to use the specified host
+   - Useful when Frigate runs in Docker and RTSP streams need to be accessed from the host network
+   - Format: `host:port` or just `host` (e.g., `frigate:8554` or `192.168.1.100:8554`)
+
 ### 🎬 **Timelapse Generation**
 1. **Choose your output format**:
    - **MP4**: Best for long timelapses, smaller file size, better quality, hardware accelerated (H.264 + NVENC)
@@ -210,7 +241,7 @@ docker compose up -d --build
 
 - **Frontend**: React + TailwindCSS + WebSocket client (port 3000)
 - **Backend**: Node.js + Express + FFmpeg + WebSocket server (ports 3001, 3002)
-- **Database**: SQLite with PostgreSQL migration path
+- **Database**: SQLite database for session tracking and metadata
 - **Storage**: Docker volumes for snapshots, videos, and database
 - **MQTT**: Real-time message handling for trigger-based captures
 - **Scheduling**: Automated cleanup with node-cron
@@ -244,6 +275,149 @@ docker compose up -d --build
 - **Trigger patterns** - Customizable message-based capture
 - **Real-time status** - Connection and message monitoring
 
+### 🚀 **Hardware Acceleration (NVIDIA GPU)**
+The application supports NVIDIA GPU hardware acceleration for both video decoding and encoding, significantly improving performance and reducing CPU usage.
+
+**Features:**
+- **CUDA Decoding** - Hardware-accelerated decoding for all video sources (RTSP, USB cameras, capture cards, HTTP/RTMP streams, screen capture)
+- **NVENC Encoding** - Hardware-accelerated H.264 encoding for MP4 timelapse generation
+- **Automatic Fallback** - Falls back to software encoding if GPU is unavailable
+
+**Requirements:**
+- NVIDIA GPU with CUDA support
+- NVIDIA Docker runtime installed on the host system
+- Docker Compose with GPU support configured
+
+**Docker Configuration:**
+The `docker-compose.yml` includes GPU configuration:
+```yaml
+deploy:
+  resources:
+    reservations:
+      devices:
+      - driver: nvidia
+        count: 1
+        capabilities: [gpu]
+```
+
+**Environment Variables:**
+- `NVIDIA_VISIBLE_DEVICES=all` - Makes all NVIDIA GPUs visible to the container
+- `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` - Enables compute, video encoding/decoding, and utility capabilities
+
+**Device Access:**
+- `/dev/dri` volume mount provides access to Direct Rendering Infrastructure for GPU acceleration
+
+**Benefits:**
+- Faster video processing and encoding
+- Lower CPU usage, allowing more concurrent captures
+- Better performance with high-resolution streams
+- Reduced power consumption compared to software encoding
+
+### 🔌 **Device Access Configuration**
+The application requires direct access to hardware devices for USB cameras, capture cards, and GPU acceleration.
+
+**USB Cameras and Capture Cards:**
+- Device paths are mounted from the host: `/dev/video0`, `/dev/video1`, `/dev/video2`
+- Add additional device paths in `docker-compose.yml` if you have more video devices
+- The container runs in `privileged: true` mode to access these devices
+- Required for V4L2 (Video4Linux2) device access
+
+**GPU Access:**
+- `/dev/dri` directory is mounted for Direct Rendering Infrastructure access
+- Enables hardware acceleration for video processing
+- Required for NVIDIA GPU acceleration (see Hardware Acceleration section)
+
+**Privileged Mode:**
+- The backend container runs with `privileged: true` to access hardware devices
+- This is necessary for USB camera and capture card access
+- If security is a concern, consider using specific device capabilities instead
+
+**Example Configuration:**
+```yaml
+devices:
+  - /dev/video0:/dev/video0
+  - /dev/video1:/dev/video1
+  - /dev/video2:/dev/video2
+  - /dev/dri:/dev/dri  # GPU acceleration
+privileged: true
+```
+
+**Troubleshooting:**
+- If cameras aren't detected, verify device paths exist on the host: `ls -la /dev/video*`
+- Check device permissions on the host system
+- Ensure the user running Docker has access to video devices
+
+### 🖥️ **Screen Capture Setup**
+Screen capture functionality requires X11 access to capture the desktop or application windows.
+
+**Requirements:**
+- X11 display server running on the host
+- X11 socket access from the container
+- DISPLAY environment variable configured
+
+**Docker Configuration:**
+```yaml
+volumes:
+  - /tmp/.X11-unix:/tmp/.X11-unix:rw  # X11 socket access
+environment:
+  - DISPLAY=:0  # X11 display number
+```
+
+**X11 Socket Mount:**
+- `/tmp/.X11-unix` is mounted to provide access to the X11 server
+- Required for FFmpeg's `x11grab` input to capture screen content
+- Must be mounted as read-write (`:rw`) for proper functionality
+
+**DISPLAY Environment Variable:**
+- `DISPLAY=:0` specifies the X11 display to capture (typically `:0` for the first display)
+- Adjust if using a different display number
+- Format: `:display_number.screen_number` (e.g., `:0.0`)
+
+**Usage:**
+- Select "Screen Capture" as the video source type
+- Configure the display (defaults to `:0.0`)
+- Optionally specify a region to capture (e.g., `1920x1080+0+0`)
+- Start capture to begin recording the screen
+
+**Platform Support:**
+- Currently supported on Linux only
+- Requires X11 (X Window System)
+- Wayland is not currently supported
+
+**Troubleshooting:**
+- If screen capture fails, verify X11 is running: `echo $DISPLAY`
+- Check X11 socket exists: `ls -la /tmp/.X11-unix/`
+- Ensure X11 allows connections: `xhost +local:docker` (for testing only)
+- Verify the display number matches your X11 setup
+
+### 🌐 **Docker Network Configuration**
+The application supports connecting to external Docker networks for integration with other services.
+
+**Frigate Network Integration:**
+- The `frigate_default` external network allows the backend to communicate with Frigate containers
+- Required for Frigate camera discovery and RTSP stream access
+- Must be created by Frigate's Docker Compose setup before starting this application
+
+**Configuration:**
+```yaml
+networks:
+  rtsp-network:
+    driver: bridge
+  frigate_default:
+    external: true
+```
+
+**Setup Steps:**
+1. Ensure Frigate is running and has created the `frigate_default` network
+2. Verify the network exists: `docker network ls | grep frigate_default`
+3. The backend service automatically connects to this network if configured
+4. If Frigate uses a different network name, update `docker-compose.yml` accordingly
+
+**Troubleshooting:**
+- If Frigate cameras aren't accessible, verify the network exists: `docker network inspect frigate_default`
+- Check that both containers are on the same network: `docker network inspect frigate_default | grep -A 5 Containers`
+- Ensure the network name matches exactly (case-sensitive)
+
 ## API Endpoints
 
 ### 📡 **Core Capture**
@@ -262,6 +436,11 @@ docker compose up -d --build
 - `POST /api/start-mqtt-capture` - Start MQTT listener session
 - `POST /api/stop-mqtt-capture` - Stop MQTT session
 - `GET /api/mqtt-status/:id` - Get MQTT connection status
+
+### 🎥 **Frigate Integration**
+- `GET /api/frigate/cameras?apiUrl=<optional_url>` - Fetch cameras from Frigate API
+  - Returns list of cameras with names, RTSP URLs, and configuration details
+  - If `apiUrl` is not provided, uses `FRIGATE_API_URL` environment variable
 
 ### 🗄️ **Session Management**
 - `GET /api/sessions` - List all sessions with metadata
@@ -285,14 +464,41 @@ docker compose up -d --build
 ```bash
 # MQTT Default Settings (optional)
 MQTT_BROKER_URL=mqtt://broker.example.com:1883
+MQTT_PORT=1883
 MQTT_USERNAME=your_username
 MQTT_PASSWORD=your_password
+
+# Frigate Integration (optional)
+FRIGATE_API_URL=http://frigate:5000
+FRIGATE_RTSP_HOST=frigate:8554
+
+# Screen Capture (optional)
+DISPLAY=:0
+
+# NVIDIA GPU Acceleration (optional)
+NVIDIA_VISIBLE_DEVICES=all
+NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
 # Storage Quotas (optional)
 MAX_TOTAL_STORAGE_MB=1024
 MAX_SESSION_STORAGE_MB=100
 DEFAULT_RETENTION_DAYS=7
+
+# Photo Import Path (optional)
+IMPORT_PARENT_PATH=/mnt/photo_import
 ```
+
+**Variable Descriptions:**
+- `MQTT_BROKER_URL` - MQTT broker URL (e.g., `mqtt://broker.example.com:1883`)
+- `MQTT_PORT` - MQTT broker port (if not included in URL)
+- `MQTT_USERNAME` - MQTT authentication username
+- `MQTT_PASSWORD` - MQTT authentication password
+- `FRIGATE_API_URL` - Frigate API endpoint (defaults to `http://frigate:5000`)
+- `FRIGATE_RTSP_HOST` - Host for Frigate RTSP streams (e.g., `frigate:8554` or `192.168.1.100:8554`)
+- `DISPLAY` - X11 display number for screen capture (defaults to `:0`)
+- `NVIDIA_VISIBLE_DEVICES` - Which NVIDIA GPUs to make visible (defaults to `all`)
+- `NVIDIA_DRIVER_CAPABILITIES` - GPU capabilities to enable (defaults to `compute,video,utility`)
+- `IMPORT_PARENT_PATH` - Base path for photo imports (defaults to `/mnt/photo_import`)
 
 ## Roadmap
 
