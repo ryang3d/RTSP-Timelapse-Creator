@@ -31,7 +31,7 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME:-}
       - MQTT_PASSWORD=${MQTT_PASSWORD:-}
       - FRIGATE_API_URL=${FRIGATE_API_URL:-http://frigate:5000}
-      - FRIGATE_RTSP_HOST=${FRIGATE_RTSP_HOST:-}
+      - FRIGATE_RTSP_HOST=${FRIGATE_RTSP_HOST:-frigate:8554}
     # NEW: Privileged mode for device access
     privileged: true
     restart: unless-stopped

@@ -605,16 +605,25 @@ async function fetchFrigateCameras(apiUrl) {
                   height: null
                 };
 
-                // Extract RTSP URL - prioritize record/main stream over detect/sub streams
-                // In Frigate, inputs[0] is typically the detect/sub stream, and the record stream
-                // is usually the last input or a higher resolution stream
+                // Extract RTSP URL - prioritize record stream over detect stream
+                // In Frigate, streams are identified by their roles: 'detect' for detection and 'record' for recording
                 if (cameraConfig.ffmpeg?.inputs) {
                   const inputs = cameraConfig.ffmpeg.inputs;
                   
-                  // Priority: Use the last input (typically the record/main stream)
-                  // If there's only one input, use it (legacy config)
-                  if (inputs.length > 1) {
-                    // Multiple inputs: use the last one which is typically the record stream
+                  // First, look for an input with the 'record' role
+                  let recordInput = null;
+                  for (const input of inputs) {
+                    if (input?.roles && Array.isArray(input.roles) && input.roles.includes('record') && input.path) {
+                      recordInput = input;
+                      break;
+                    }
+                  }
+                  
+                  if (recordInput) {
+                    // Use the input with the record role
+                    camera.rtspUrl = recordInput.path;
+                  } else if (inputs.length > 1) {
+                    // No explicit record role found, fallback: use the last input (typically the record stream)
                     // The first input is usually the detect/sub stream for lower resolution detection
                     for (let i = inputs.length - 1; i >= 0; i--) {
                       if (inputs[i]?.path) {
